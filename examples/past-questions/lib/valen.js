@@ -1,12 +1,12 @@
 /*!
- * QueFlow.js
+ * Valen.js
  * (c) 2024-now Sodiq Tunde (lahan-xyz)
  * Released under the MIT License.
  */
 'use-strict';
 
 // Counter for generating unique IDs for elements with reactive data.
-let counterQF = 0,
+let counterVA = 0,
   nuggetCounter = 0,
   routerObj = {},
   currentComponent,
@@ -18,7 +18,7 @@ let stylesheet = {
 };
 
 const GLOBAL_STATE = {
-  dataQF: [],
+  dataVA: [],
   dependencyMap: new Map()
 }
 
@@ -83,8 +83,8 @@ class LRUCache {
 
 
 // O(1) element lookup
-const selectElement = qfid => {
-  return reactiveCache.get(qfid);
+const selectElement = valen_id => {
+  return reactiveCache.get(valen_id);
 };
 
 
@@ -124,7 +124,6 @@ const globalState = (name, val, shouldStore) => {
     const proxy = new Proxy(object, {
       get(target, key) {
         if (currentTemplate) {
-          const temp = currentComponent;
           globCurrentDepArr.push({ temp: currentTemplate, key });
         }
         
@@ -152,7 +151,7 @@ const globalState = (name, val, shouldStore) => {
   globalThis[name] = reactiveObj(obj);
 };
 
-// Creates a reactive signal, a proxy object that automatically updates the DOM when its values change.
+// Creates a reactive signal, a proxy object that automatically updates the DOM.
 function createSignal(data, object) {
   const item = typeof data !== "object" ? { value: data } : data;
   
@@ -179,7 +178,6 @@ function createSignal(data, object) {
         if (prev !== value) {
           target[key] = value;
           
-          // Run the update synchronously – batching is handled by batchedUpdate
           if (!object.isFrozen) {
             const goAhead = object.onUpdate ?
               object.onUpdate({ oldVal: prev, key, newVal: value },
@@ -242,13 +240,12 @@ function buildDependencyMap(instance, data) {
     let i = 0,
       len = depArr.length;
     
-    const dataQF = isNotGlobal ? data : GLOBAL_STATE.dataQF;
+    const dataVA = isNotGlobal ? data : GLOBAL_STATE.dataVA;
     const targetMap = isNotGlobal ? instance.dependencyMap : GLOBAL_STATE.dependencyMap;
     
     for (i = 0; i < len; i++) {
       const { temp, key } = depArr[i];
-      
-      dataQF.forEach((entry, j) => {
+      dataVA.forEach((entry, j) => {
         if (entry.template.includes(temp)) {
           let deps = targetMap.get(key);
           if (!deps) {
@@ -266,30 +263,64 @@ function buildDependencyMap(instance, data) {
   
   currentDepArr = [];
   globCurrentDepArr = [];
-  GLOBAL_STATE.dataQF = [];
+  GLOBAL_STATE.dataVA = [];
 }
 
 
 
-const lexerCache = new Map();
+const lexerCache = new LRUCache(500);
 
 function lexTemplate(templateString) {
-  // 1. Full-String Memoization: Skip parsing entirely if we've seen this string
   if (lexerCache.has(templateString)) {
     return lexerCache.get(templateString);
   }
   
-  const arr = [];
+  const chunks = [];
   let depth = 0;
   let inQuote = false;
   let quoteChar = null;
-  let startIdx = -1;
+  let startIdx = 0;
+  let exprStart = -1;
   
   for (let i = 0; i < templateString.length; i++) {
     const char = templateString[i];
     
-    // Quote Tracking (Ignore brackets inside strings)
-    if ((char === '"' || char === "'" || char === '`') && templateString[i - 1] !== '\\') {
+    // 1. SMART CONTEXT CHECK: Detect Native HTML Event Handlers
+    if (depth === 0 && (char === '"' || char === "'")) {
+      let j = i - 1;
+      
+      // Skip any trailing spaces between the attribute name, "=", and the quote
+      while (j > 0 && /\s/.test(templateString[j])) j--;
+      
+      if (templateString[j] === '=') {
+        j--;
+        while (j > 0 && /\s/.test(templateString[j])) j--;
+        
+        // Extract the attribute name
+        let nameEnd = j + 1;
+        while (j >= 0 && !/[\s=>/<{}]/.test(templateString[j])) j--;
+        const attrName = templateString.slice(j + 1, nameEnd);
+        
+        // If it's a native inline event handler, fast-forward to the closing quote
+        if (attrName.startsWith('on')) {
+          let closingIdx = i + 1;
+          while (closingIdx < templateString.length) {
+            if (templateString[closingIdx] === char && templateString[closingIdx - 1] !== '\\') {
+              break;
+            }
+            closingIdx++;
+          }
+          
+          if (closingIdx < templateString.length) {
+            i = closingIdx; // Skip the entire body of the event listener
+            continue;
+          }
+        }
+      }
+    }
+    
+    // 2. SCOPED QUOTE TRACKING (For handling quotes INSIDE Valen expressions)
+    if (depth > 0 && (char === '"' || char === "'" || char === '`') && templateString[i - 1] !== '\\') {
       if (!inQuote) {
         inQuote = true;
         quoteChar = char;
@@ -299,43 +330,63 @@ function lexTemplate(templateString) {
       }
     }
     
-    // Bracket Tracking
+    // 3. BRACKET TRACKING
     if (!inQuote) {
       if (char === '[') {
-        if (depth === 0) startIdx = i;
+        if (depth === 0) {
+          if (startIdx < i) {
+            chunks.push({ isExpr: false, val: templateString.slice(startIdx, i) });
+          }
+          exprStart = i;
+        }
         depth++;
       } else if (char === ']') {
-        depth--;
-        
-        if (depth === 0) {
-          arr.push(templateString.slice(startIdx + 1, i));
+        if (depth > 0) {
+          depth--;
+          
+          if (depth === 0) {
+            chunks.push({ isExpr: true, val: templateString.slice(exprStart + 1, i) });
+            startIdx = i + 1;
+          }
         }
       }
     }
   }
   
-  // Cache the complete result for this exact template string
-  lexerCache.set(templateString, arr);
-  return arr;
+  // 4. CLEANUP
+  if (startIdx < templateString.length) {
+    chunks.push({ isExpr: false, val: templateString.slice(startIdx) });
+  }
+  
+  lexerCache.set(templateString, chunks);
+  return chunks;
 }
 
+
 const ENTITY_REGEX = /&(gt|lt);/g;
-const evaluatorCache = new Map();
+// Prevent memory leaks
+const evaluatorCache = new LRUCache(500);
 
 function evaluateTemplate(templateString, instance) {
-  const lexed = lexTemplate(templateString);
+  const chunks = lexTemplate(templateString);
   
-  // Fast exit to save execution time
-  if (lexed.length === 0) return templateString;
+  // Fast exit: If it's just one chunk of text, no expressions exist
+  if (chunks.length === 1 && !chunks[0].isExpr) return templateString;
   
-  let evaluated = templateString;
+  let combinedHTML = '';
   
-  // Standard 'for' loop is slightly faster than 'for...of' in heavy execution paths
-  for (let i = 0; i < lexed.length; i++) {
-    const innerContent = lexed[i];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
     
-    // Reactivity dependency tracking
-    currentTemplate = innerContent;
+    // If it's standard HTML text, just append it and move on
+    if (!chunk.isExpr) {
+      combinedHTML += chunk.val;
+      continue;
+    }
+    
+    // --- EXPRESSION EVALUATION ---
+    const innerContent = chunk.val;
+    currentTemplate = innerContent; // Reactivity dependency trap
     
     const ext = innerContent.replace(ENTITY_REGEX, (_, entity) =>
       entity === 'gt' ? '>' : '<'
@@ -343,43 +394,42 @@ function evaluateTemplate(templateString, instance) {
     
     if (!ext) continue;
     
-    const isGlobal = ext.charCodeAt(0) === 36; // Faster check for '$'
-    const cacheKey = `eval:${ext}`;
+    const isGlobal = ext.charCodeAt(0) === 36; // '$'
     
-    let evaluator = evaluatorCache.get(cacheKey);
+    let evaluator = evaluatorCache.get(ext);
     
     if (!evaluator) {
       try {
+        // PERFORMANCE KEY: We pass `data` as a direct parameter to the Function.
+        // This is significantly faster and safer than `with(this.data)`.
         const source = isGlobal ?
           `return ${ext};` :
-          `with (this.data) { return ${ext}; }`;
+          `with (data) { return ${ext}; }`;
         
-        evaluator = new Function(source);
-        evaluatorCache.set(cacheKey, evaluator);
+        // Pass 'data' as the argument name
+        evaluator = new Function("data", source);
+        evaluatorCache.set(ext, evaluator);
       } catch (err) {
-        console.warn(`QueFlow Syntax Error compiling: \`${innerContent}\`\n`, err);
+        console.warn(`Valen Syntax Error in \`${innerContent}\`\n`, err);
+        combinedHTML += `[${innerContent}]`; // Output raw bracket if it fails
         continue;
       }
     }
     
     try {
-      const parsed = isGlobal ? evaluator() : evaluator.call(instance);
+      // Pass instance.data directly into the function execution
+      const parsed = isGlobal ? evaluator() : evaluator.call(instance, instance.data);
       
-      // Strict nullish check covers both undefined and null. isNaN catches Math failures.
-      if (parsed == null || Number.isNaN(parsed)) {
-        continue;
+      if (parsed != null && !Number.isNaN(parsed)) {
+        combinedHTML += parsed;
       }
-      
-      evaluated = evaluated.replace(`[${innerContent}]`, parsed);
     } catch (error) {
-      console.warn(`QueFlow Execution Error from expression \`${innerContent}\`\n`, error);
+      console.warn(`Valen Execution Error in \`${innerContent}\`\n`, error);
     }
   }
   
-  // Clear reactivity tracker
   currentTemplate = "";
-  
-  return evaluated;
+  return combinedHTML;
 }
 
 
@@ -437,7 +487,7 @@ function processComponentMarkup(jsx, instance, subId) {
         element.setAttribute("data-sub_id", subId);
       }
       
-      const childData = generateDataQF(
+      const childData = generateDataVA(
         element,
         element.childElementCount > 0, // isParent
         instance
@@ -455,7 +505,7 @@ function processComponentMarkup(jsx, instance, subId) {
     
   } catch (error) {
     console.warn(
-      `QueFlow:\nAn error in Component \`${instance.name || ""}\`:\n ${error}\n\nError sourced from: \`${jsx}\``
+      `Valen:\nAn error in Component \`${instance.name || ""}\`:\n ${error}\n\nError sourced from: \`${jsx}\``
     );
     return "";
   }
@@ -484,9 +534,10 @@ function convertDirective(attr, value, child) {
     case 'q:show': {
       if (value.includes('[') && value.includes(']')) {
         const expr = b(value, true).trim();
-        return ['display', `[ ${expr} ? 'block' : 'none' ]`, false];
+        const fExpr = expr ? `[${expr} ? 'block' : 'none']` : "none";
+        return ['display', fExpr, false];
       }
-      return ['display', (value === 'true' || value === true) ? 'block' : 'none', false];
+      return ['display', (value === 'true' || value === true || value.length) ? 'block' : 'none', false];
     }
     case 'q:text':
       child.textContent = value;
@@ -500,9 +551,9 @@ function convertDirective(attr, value, child) {
       
     default:
       if (attr === 'q:once') {
-        console.warn(`QueFlow: 'q:once' must be followed by ':attribute' (e.g., q:once:id="...").`);
+        console.warn(`Valen: 'q:once' must be followed by ':attribute' (e.g., q:once:id="...").`);
       } else {
-        console.warn(`QueFlow: unknown directive '${attr}'\n'${child.outerHTML}'`);
+        console.warn(`Valen: unknown directive '${attr}'\n'${child.outerHTML}'`);
       }
       return [attr, value, false];
   }
@@ -522,10 +573,10 @@ const ATTR_TO_PROP = {
 
 const CONTENT_DIRECTIVES = new Set(['q:text', 'q:html', 'q:once:text', 'q:once:html']);
 
-const generateDataQF = (child, isParent, instance) => {
+const generateDataVA = (child, isParent, instance) => {
   const arr = [];
   const attributes = getAttributes(child);
-  let QFID = child.getAttribute("data-qfid");
+  let VAID = child.getAttribute("data-valen_id");
   const useStrict = instance.useStrict;
   
   if (!isParent) {
@@ -551,6 +602,19 @@ const generateDataQF = (child, isParent, instance) => {
     value = value || '';
     
     let once = false;
+    const isEvent = attribute.startsWith("on");
+    
+    if (isEvent) {
+      if(child.getAttribute(attribute)) {
+        child.setAttribute('data-v-on', attribute.slice(2));
+        child.setAttribute('data-v-exp', value.trim());
+        child.removeAttribute(attribute);
+        continue;
+      } else {
+        continue;
+      }
+    }
+    
     [attribute, value, once] = convertDirective(attribute, value, child);
     
     const hasTemplate = value.indexOf('[') !== -1 && value.indexOf(']') !== -1;
@@ -571,9 +635,9 @@ const generateDataQF = (child, isParent, instance) => {
     
     const evaluation = evaluateTemplate(value, instance);
     
-    if (!QFID) {
-      QFID = `qf${counterQF++}`;
-      child.setAttribute('data-qfid', QFID);
+    if (!VAID) {
+      VAID = `va${counterVA++}`;
+      child.setAttribute('data-valen_id', VAID);
     }
     
     if (isStyle) {
@@ -590,13 +654,13 @@ const generateDataQF = (child, isParent, instance) => {
     const entryObj = {
       template: value,
       key: isStyle ? `style.${attribute}` : attribute,
-      qfid: QFID,
+      valen_id: VAID,
       isGlobal,
       once
     };
     
     if (isGlobal) {
-      GLOBAL_STATE.dataQF.push(entryObj);
+      GLOBAL_STATE.dataVA.push(entryObj);
     } else {
       arr.push(entryObj);
     }
@@ -659,54 +723,63 @@ function initiateStyleSheet(selector = "", instance = {}, shouldSwitch) {
 }
 
 
-// Global cache for compiled event handlers
+
+function addToReactiveCache(parent) {
+  const walker = document.createTreeWalker(
+      parent,
+      NodeFilter.SHOW_ELEMENT
+    );
+    
+  let node;
+  
+  while (node = walker.nextNode()) {
+    const valen_id = node.dataset.valen_id;
+    if (valen_id && !reactiveCache.has(valen_id)) {
+      reactiveCache.set(valen_id, node);
+    }
+  }
+}
+
+
+// A registry of events your framework supports via delegation
+const DELEGATED_EVENTS = new Set(['click', 'input', 'submit', 'keydown', 'change']);
 const eventHandlerCache = new LRUCache(500);
 
-function handleEventListener(parent, instance) {
-  const children = parent.querySelectorAll("*");
+function setupEventDelegation(container, instance) {
+  // Prevent attaching multiple master listeners if renderWith is called multiple times
+  if (container._vDelegated) return;
+  container._vDelegated = true;
   
-  for (const child of children) {
-    const subId = child.dataset.sub_id;
-    const targetInstance = subId ? components.get(subId) : instance;
-    if (!targetInstance) continue;
-    
-    const attributes = getAttributes(child);
-    
-    for (let { attribute, value } of attributes) {
-      if (!attribute.startsWith("on")) continue;
-      value = value.trim();
-      // Cache key: expression
-      const cacheKey = `${value}`;
-      let handler = eventHandlerCache.get(cacheKey);
+  DELEGATED_EVENTS.forEach(eventType => {
+    container.addEventListener(eventType, (e) => {
+      // 1. Find the closest element that cares about this specific event
+      const target = e.target.closest(`[data-v-on="${eventType}"]`);
+ 
+      if (!target) return;
       
+      // 2. Extract the data
+      const expression = target.getAttribute('data-v-exp');
+      const subId = target.getAttribute('data-sub_id');
+      // 3. Resolve the component instance
+      const targetInstance = subId ? components.get(subId) : instance;
+      if (!targetInstance) return;
+      // 4. Compile or fetch from cache (Just-In-Time Compilation!)
+      let handler = eventHandlerCache.get(expression);
       if (!handler) {
         try {
-          // Compile the function body once per unique expression pair
-          handler = Function("e", `const data = this.data; ${value}`);
-          eventHandlerCache.set(cacheKey, handler);
-        } catch (e) {
-          console.warn(`QueFlow:\nFailed to add event listener on ${child.tagName} element:\n\nError from: \`${value}\`\n${e}`);
-          continue;
+          handler = new Function("e", `const data = this.data; ${expression}`);
+          eventHandlerCache.set(expression, handler);
+        } catch (err) {
+          console.warn(`Valen: Failed to execute event handler:\n${expression}\n${err}`);
+          return;
         }
       }
       
-      // Assign the handler
-      child[attribute] = handler.bind(targetInstance);
-      
-      // Store the cache key on the element for later cleanup
-      if (!child._qfHandlerKeys) child._qfHandlerKeys = [];
-      child._qfHandlerKeys.push(cacheKey);
-    }
-    
-    // Cleanup
-    child.removeAttribute("data-sub_id");
-    
-    // Cache reactive elements (skip if already cached)
-    const qfid = child.getAttribute('data-qfid');
-    if (qfid && !reactiveCache.has(qfid)) {
-      reactiveCache.set(qfid, child);
-    }
-  }
+      // 5. Execute with the correct context
+      const binded = handler.bind(targetInstance);
+      binded(e);
+    }, false);
+  });
 }
 
 
@@ -794,7 +867,7 @@ function updateComponent(changedKey, instance) {
   if (!subscribers) return;
   
   for (const subscriber of subscribers) {
-    const { template, key: targetProp, qfid: elementId, once } = subscriber;
+    const { template, key: targetProp, valen_id: elementId, once } = subscriber;
     
     const node = selectElement(elementId);
     
@@ -817,20 +890,36 @@ function updateComponent(changedKey, instance) {
   }
 }
 
-// Module‑level constant
-const RENDER_TEMPLATE_REGEX = /\[(.*?)\]/g;
+
 
 function renderTemplate(input, props, shouldSanitize) {
-  return input.replace(RENDER_TEMPLATE_REGEX, (extracted) => {
-    const trimmed = b(extracted).trim();
+
+  const chunks = lexTemplate(input);
+  
+  if (!chunks.length || chunks.length === 1 && !chunks[0].isExpr) return input;
+  
+  let combined = "";
+    
+  for (var i = 0, len = chunks.length; i < len; i++) {
+    const chunk = chunks[i],
+      val = chunk.val;
+    
+    if (!chunk.isExpr) {
+      combined += val;
+      continue;
+    }
+    
+    const trimmed = val.trim();
     const value = props[trimmed];
     
     if (value === undefined || value === null) {
-      return `[ ${trimmed} ]`; // keep placeholder for debugging
+      combined += `[${val}]`; // keep placeholder for debugging
     }
     
-    return shouldSanitize ? sanitizeString(value) : value;
-  });
+    combined += shouldSanitize ? sanitizeString(value) : value;
+  }
+    
+  return combined;
 }
 
 function initiateNuggets(markup, isNugget) {
@@ -860,11 +949,11 @@ function initiateNuggets(markup, isNugget) {
       if (instance) {
         evaluated = renderNugget(instance, d);
       } else {
-        console.warn(`QueFlow:\nNugget '${name}' is not defined`);
+        console.warn(`Valen:\nNugget '${name}' is not defined`);
         evaluated = match; // leave original markup as fallback
       }
     } catch (e) {
-      console.warn(`QueFlow:\nAn error occured while rendering Nugget '${name}': ${e}\n\nError sourced from: \`${match}\``);
+      console.warn(`Valen:\nAn error occured while rendering Nugget '${name}': ${e}\n\nError sourced from: \`${match}\``);
       evaluated = match; // keep original on error
     }
     return evaluated;
@@ -891,7 +980,7 @@ function clearAllNuggetCaches() {
 }
 
 const initiateExtendedNuggets = (markup) => {
-  // Step 1: Convert component tags to custom elements with qf-attrs
+  // Step 1: Convert component tags to custom elements with va-attrs
   const componentRegex = /<(\/?[A-Z]\w*)(\s*\(\{[\s\S]*?}\))?\s*>/g;
   const convertedMarkup = markup.replace(componentRegex, (match, p1, p2) => {
     const isClosing = match.startsWith('</');
@@ -909,7 +998,7 @@ const initiateExtendedNuggets = (markup) => {
       .replace(/\}\)/g, '}')
       .replace(/"/g, '`');
     
-    return `<${tagName} qf-attrs="${attrs}">`;
+    return `<${tagName} va-attrs="${attrs}">`;
   });
   
   // Step 2: Parse into a DocumentFragment
@@ -921,13 +1010,13 @@ const initiateExtendedNuggets = (markup) => {
     initiateExtendedNuggets._propsCache = new Map();
   }
   
-  // Step 3: Iteratively replace all qf-attrs elements (including new ones)
+  // Step 3: Iteratively replace all va-attrs elements (including new ones)
   let hasComponents = true;
   while (hasComponents) {
     hasComponents = false;
     
-    // Collect all elements with qf-attrs, deepest first
-    const elements = fragment.querySelectorAll('[qf-attrs]');
+    // Collect all elements with va-attrs, deepest first
+    const elements = fragment.querySelectorAll('[va-attrs]');
     if (elements.length === 0) break;
     
     // Convert NodeList to array, sort by depth (descending)
@@ -944,13 +1033,13 @@ const initiateExtendedNuggets = (markup) => {
       const originalTag = element.tagName.toLowerCase()
         .replace(/-([a-z])/g, (_, c) => c.toUpperCase())
         .replace(/^./, m => m.toUpperCase());
-      const attrs = element.getAttribute('qf-attrs');
+      const attrs = element.getAttribute('va-attrs');
       const content = element.innerHTML;
       const instance = nuggets.get(originalTag);
       
       if (!instance) {
-        console.warn(`QueFlow:\nNugget '${originalTag}' is not defined`);
-        element.removeAttribute('qf-attrs');
+        console.warn(`Valen:\nNugget '${originalTag}' is not defined`);
+        element.removeAttribute('va-attrs');
         continue;
       }
       
@@ -963,8 +1052,8 @@ const initiateExtendedNuggets = (markup) => {
           data = new Function(`return ${attrs}`)();
           initiateExtendedNuggets._propsCache.set(attrs, data);
         } catch (e) {
-          console.warn(`QueFlow:\nFailed to parse props for ${originalTag}: ${e}`);
-          element.removeAttribute('qf-attrs');
+          console.warn(`Valen:\nFailed to parse props for ${originalTag}: ${e}`);
+          element.removeAttribute('va-attrs');
           continue;
         }
       }
@@ -998,20 +1087,18 @@ function initiateComponents(markup, isNugget, fromAtom) {
   markup = lintPlaceholders(markup, isNugget);
   
   // If not a nugget, replace self-closing component tags with rendered output
-  if (!isNugget) {
+  if (!isNugget && !fromAtom) {
     markup = markup.replace(COMPONENT_SELF_CLOSING_REGEX, (match, tagName) => {
-      const instance = components.get(tagName);
-      if (!instance) {
-        console.warn(`QueFlow:\nComponent '<${tagName}/>' is not defined, check whether '${tagName}' is correctly spelt or is defined.`);
-        return match; // leave original to avoid further breakage
-      }
-      if (!fromAtom) {
+        const instance = components.get(tagName);
+        if (!instance) {
+          console.warn(`Valen:\nComponent '<${tagName}/>' is not defined, check whether '${tagName}' is correctly spelt or is defined.`);
+          return match; // leave original to avoid further breakage
+        }
         try {
           return renderComponent(instance, tagName);
         } catch (e) {
-          console.warn(`QueFlow:\nAn error occured while rendering Component '${tagName}' \n ${e}, \n\nError sourced from: \`${match}\``);
+          console.warn(`Valen:\nAn error occured while rendering Component '${tagName}' \n ${e}, \n\nError sourced from: \`${match}\``);
           return match;
-        }
       }
     });
   }
@@ -1046,9 +1133,9 @@ const removeEvents = (nodeList, shouldRemove) => {
   for (let i = 0, len = nodeList.length; i < len; i++) {
     const child = nodeList[i];
     
-    // 2. Clean up QueFlow's tracked handlers (Fastest path)
-    if (child._qfHandlerKeys) {
-      const keys = child._qfHandlerKeys;
+    // 2. Clean up Valen's tracked handlers (Fastest path)
+    if (child._vaHandlerKeys) {
+      const keys = child._vaHandlerKeys;
       for (let j = 0, kLen = keys.length; j < kLen; j++) {
         const attrName = keys[j];
         const handler = child[attrName];
@@ -1058,12 +1145,12 @@ const removeEvents = (nodeList, shouldRemove) => {
         child[attrName] = null;
         eventHandlerCache.delete(attrName);
       }
-      child._qfHandlerKeys = null;
+      child._vaHandlerKeys = null;
     }
     
     // 4. Bypass dataset completely, rely solely on getAttribute
-    const qfid = child.getAttribute('data-qfid');
-    if (qfid) reactiveCache.delete(qfid);
+    const valen_id = child.getAttribute('data-valen_id');
+    if (valen_id) reactiveCache.delete(valen_id);
     
     // 5. Teardown
     if (shouldRemove) child.remove();
@@ -1115,6 +1202,7 @@ class App {
   #run;
   #created;
   #template;
+  #addedToReactiveCache = false;
   
   constructor(selector = "", options = {}) {
     this.#element = typeof selector === "string" ?
@@ -1122,7 +1210,7 @@ class App {
       selector;
     
     if (!this.#element) {
-      throw new Error(`QueFlow:\nElement selector '${selector}' is invalid`);
+      throw new Error(`Valen:\nElement selector '${selector}' is invalid`);
     }
     
     // Template
@@ -1210,10 +1298,17 @@ class App {
     
     currentComponent?.navigateFunc(currentComponent.data);
     
-    handleEventListener(this.#element, this);
+    if (!this.#addedToReactiveCache) {
+      addToReactiveCache(this.#element);
+      this.#addedToReactiveCache = true;
+    }
+    
+    setupEventDelegation(this.#element, this);
     
     for (const component of components) {
       const instance = component[1];
+      if (instance.constructor.name === "Atom") continue;
+      
       if (instance.element) {
         strToEl(instance);
       }
@@ -1276,11 +1371,11 @@ class Component {
     this.navigateFunc = options.onNavigate || (() => {});
     
     if (!this.#template) {
-      throw new Error(`QueFlow:\nTemplate not provided for Component ${name}`);
+      throw new Error(`Valen:\nTemplate not provided for Component ${name}`);
     }
     
-    this.element = `qfEl${counterQF}`; // string ID – later resolved to DOM node
-    counterQF++;
+    this.element = `vaEl${counterVA}`; // string ID – later resolved to DOM node
+    counterVA++;
     
     // Reactive state
     this.data = createSignal(options.data, this);
@@ -1388,7 +1483,6 @@ class Component {
         el.replaceChildren(fragment);
       }
       
-      handleEventListener(el || this.element, this);
       this.isMounted = true; // Internal mutation
     }
   }
@@ -1410,19 +1504,35 @@ class Component {
   
   _resolveElement() {
     if (typeof this.element === 'string') {
-      return document.querySelector(`[qfid="${this.element}"]`) || null;
+      return document.querySelector(this.element) || null;
     }
     return this.element;
   }
 }
 
-function addIndexToTemplate(str, index) {
-  const regex = /\[(.*?)\]/g;
-  const output = str.replace(regex, (match) => {
-    const inner = b(match).trim();
-    return `[this.data[${index}].${inner}]`;
-  });
-  return lintPlaceholders(output);
+function addIndexToTemplate(str, index, instance) {
+  str = lintPlaceholders(str);
+  const chunks = lexTemplate(str);
+
+  let combined = "";
+  
+  if (!chunks.length || chunks.length === 1 && !chunks[0].isExpr) return str;
+  
+  for (var i = 0, len = chunks.length; i < len; i++) {
+    const chunk = chunks[i],
+      val = chunk.val;
+    
+    if (!chunk.isExpr) {
+      combined += val;
+      continue;
+    }
+    
+    combined += `[this.data[${index}].${val.trim()}]`;
+  }
+  
+  const linted = lintPlaceholders(combined);
+
+  return instance ? evaluateTemplate(linted, instance) : linted;
 }
 
 
@@ -1443,7 +1553,9 @@ function g(str, className) {
 function stringToDocumentFragment(htmlString = "") {
   sharedTemplate.innerHTML = htmlString;
   
-  return sharedTemplate.content.cloneNode(true);
+  // Return the content directly. 
+  // Appending it later will move the nodes, saving ~130ms of memory cloning!
+  return sharedTemplate.content; 
 }
 
 
@@ -1464,7 +1576,9 @@ class Atom {
     this.#isReactive = options.isReactive;
     
     this.stylesheet = options.stylesheet;
+    this.dependencyMap = new Map();
     initiateStyleSheet(`#${id}`, this);
+    components.set(name, this)
   }
   
   // 2. Expose read-only public getters
@@ -1480,7 +1594,7 @@ class Atom {
     if (typeof this.#element === "string") {
       const resolvedNode = document.getElementById(this.#element);
       if (!resolvedNode) {
-        throw new Error(`QueFlow:\nMount node of '${this.#name}' is invalid or not provided`);
+        throw new Error(`Valen:\nMount node of '${this.#name}' is invalid or not provided`);
       }
       this.#element = resolvedNode; // Cache the node
     }
@@ -1492,7 +1606,6 @@ class Atom {
     const el = this._getElement();
     if (!el) return;
     
-    // Use highly performant TreeWalker instead of CSS querySelectorAll('*')
     const allNodes = [];
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT);
     let node = walker.currentNode; // Start at root container
@@ -1504,80 +1617,116 @@ class Atom {
     
     removeEvents(allNodes);
     
-    // Safely removes ALL children at native C++ speeds
     el.replaceChildren();
     
     this.#data = [];
   }
   
   renderWith(data, position = "append") {
-    if (!data || typeof data !== "object") {
-      throw new Error(`QueFlow:\nFirst argument passed to '${this.#name}.renderWith()' must either be an object or an array.`);
-    }
-    
-    const el = this._getElement();
-    const dataArray = Array.isArray(data) ? data : [data];
-    if (dataArray.length === 0) return;
-    
-    // Assign directly to the private field
-    this.#data = createSignal(dataArray.slice(), this);
-    
-    // Build one combined HTML string from all items
-    let combinedHTML = '';
-    
-    for (let i = 0; i < dataArray.length; i++) {
-      const item = dataArray[i];
-      const rawTemplate = typeof this.#template === "function" ?
-        this.#template(item, i) :
-        this.#template;
-      
-      const indexedTemplate = addIndexToTemplate(rawTemplate, i);
-      
-      if (this.#isReactive) {
-        // Expand components/nuggets before concatenation
-        combinedHTML += initiateComponents(indexedTemplate, false, true);
-      } else {
-        // Non‑reactive: simple placeholder replacement + linting
-        let rendered = renderTemplate(indexedTemplate, item, true);
-        rendered = initiateNuggets(rendered);
-        rendered = initiateExtendedNuggets(rendered);
-        const linted = lintPlaceholders(rendered, true);
-        combinedHTML += linted;
-      }
-    }
-    
-    // Single parse & reactive processing
-    const htmlContent = processComponentMarkup(combinedHTML, this, null);
-    const fragment = stringToDocumentFragment(htmlContent);
-    
-    // Insert once
-    if (position === "append") {
-      el.appendChild(fragment);
-    } else {
-      el.prepend(fragment);
-    }
-    
-    handleEventListener(el, this);
+  if (!data || typeof data !== "object") {
+    throw new Error(
+      `Valen:\nFirst argument passed to '${this.#name}.renderWith()' must either be an object or an array.`
+    );
   }
   
-  set(index, value) {
+  const el = this._getElement();
+  const dataArray = Array.isArray(data) ? data : [data];
+  if (dataArray.length === 0) return;
+  
+  const dataLen = this.#data.length;
+  
+  this.#data = createSignal(dataArray.slice(), this);
+  
+  // Return a Promise that resolves when rendering finishes
+  return new Promise((resolve, reject) => {
+    const isTemplateFunc = typeof this.#template === "function";
+    const isReactive = this.#isReactive;
+    const template = this.#template;
+    const name = this.#name;
+    
+    const processNuggets = (html) => {
+      html = initiateNuggets(html);
+      return initiateExtendedNuggets(html);
+    };
+    
+    // ── Configuration ──
+    const BATCH_SIZE = 30; // items per animation frame – tune this!
+    const htmlParts = [];
+    let currentIndex = dataLen;
+    
+    const processBatch = () => {
+      const end = Math.min(currentIndex + BATCH_SIZE, dataArray.length);
+      
+      for (let i = currentIndex; i < end; i++) {
+        const item = dataArray[i];
+        let itemHTML = isTemplateFunc ? template(item, i) : template;
+
+        itemHTML = isReactive ?
+          addIndexToTemplate(itemHTML, i) :
+          addIndexToTemplate(itemHTML, i, this);
+        
+        if (isReactive) {
+          itemHTML = initiateComponents(itemHTML, false, true);
+          itemHTML = processComponentMarkup(itemHTML, this, name);
+        } else {
+          itemHTML = processNuggets(itemHTML);
+          itemHTML = lintPlaceholders(itemHTML, true);
+          itemHTML = processComponentMarkup(itemHTML, this, name);
+        }
+        
+        htmlParts.push(itemHTML);
+      }
+      
+      currentIndex = end;
+      
+      if (currentIndex < dataArray.length) {
+        // Still have items – yield the main thread
+        requestAnimationFrame(processBatch);
+      } else {
+        // All items processed – build final DOM once and mount
+        try {
+          const combinedHTML = htmlParts.join('');
+          const fragment = stringToDocumentFragment(combinedHTML);
+          if (position === "append") {
+            el.appendChild(fragment);
+          } else {
+            el.prepend(fragment);
+          }
+          
+          addToReactiveCache(el);
+          resolve(); // Done
+        } catch (err) {
+          reject(err);
+        }
+      }
+    };
+    // Kick off the first batch
+    requestAnimationFrame(processBatch);
+  });
+}
+  
+  set(index, value, shallow) {
     if (!this.#isReactive) {
-      throw new Error(`QueFlow:\nCannot call 'set()' on Atom ${this.#name}.\n\n${this.#name} is not a reactive Atom`);
+      throw new Error(`Valen:\nCannot call 'set()' on Atom ${this.#name}.\n\n${this.#name} is not a reactive Atom`);
     }
     
     if (typeof index === "number") {
+
       if (value && typeof value === "object") {
-        Object.keys(value).forEach(key => {
+        if(shallow) {
+          Object.keys(value).forEach(key => {
           this.#data[index][key] = value[key];
-        });
+          });
+        } else {
+          this.#data[index] = value;
+        }
       }
     } else if (Array.isArray(index)) {
-      // Streamlined: directly uses the mapped item instead of re-querying the array index
       index.forEach((newObj, i) => {
-        if (newObj) this.#data[i] = newObj;
+        this.#data[i] = newObj;
       });
     } else {
-      console.warn(`QueFlow:\nFirst Argument passed to '${this.#name}.set()' must either be a number or an array.`);
+      console.warn(`Valen:\nFirst Argument passed to '${this.#name}.set()' must either be a number or an array.`);
     }
   }
 }
@@ -1599,7 +1748,6 @@ const renderNugget = (instance, data, isExtended, children) => {
     let rendered = renderTemplate(initiated, data);
     
     const html = g(rendered, className);
-    
     if (!instance.stylesheetInitiated) {
       // Initiate stylesheet for instance 
       initiateStyleSheet("." + className, instance, true);
@@ -1724,12 +1872,12 @@ function handleRouter(input) {
       const name = data[i].component;
       const title = data[i].title;
       if (!title) {
-        throw new Error(`QueFlow Router Error:\nTitle not set for component '${ name }'`)
+        throw new Error(`Valen Router Error:\nTitle not set for component '${ name }'`)
       }
       
       let instance = components.get(name);
       
-      if (!instance) throw new Error(`\n\nQueFlow Router Error:\nAn error occured while rendering component '${name}'`);
+      if (!instance) throw new Error(`\n\nValen Router Error:\nAn error occured while rendering component '${name}'`);
       
       if (route === "*") {
         comp404 = name;

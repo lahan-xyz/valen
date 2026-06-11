@@ -1,4 +1,4 @@
-import { Nugget } from 'queflow';
+import { Nugget } from 'valen';
 
 const Text = new Nugget ('Text', {
   template: (data) => {

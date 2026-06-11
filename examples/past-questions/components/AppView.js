@@ -1,4 +1,4 @@
-import { Component, globalState } from 'queflow'
+import { Component, globalState } from 'valen'
 import QuestionCard from '../atoms/QuestionCard.js'
 
 // Subject list

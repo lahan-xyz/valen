@@ -14,25 +14,51 @@
   <script type="importmap">
     {
       "imports": {
-        "queflow": "./lib/queflow.js"
+        "valen": "./lib/valen.js"
       }
     }
   </script>
   
-  <link rel="modulepreload" href="./lib/queflow.js">
+  <link rel="modulepreload" href="./lib/valen.js">
   <link rel="modulepreload" href="./App.js">
   
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap" media="print" onload="this.media='all'">
-  <style>body, #app{ background: #0a0a0f;}</style>
+  <style>
+    body,
+    #app {
+      background: #0a0a0f;
+    }
+  </style>
 </head>
 
 <body>
-
+  
   <div id="app">
     <style>
-      .app-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; background: #0a0a0f; }
-      .spinner { width: 40px; height: 40px; border: 4px solid #ddd; border-top-color: #22c55e; border-radius: 50%; animation: spin 1s linear infinite; }
-      @keyframes spin { to { transform: rotate(360deg); } }
+      .app-loading {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        font-family: sans-serif;
+        background: #0a0a0f;
+      }
+      
+      .spinner {
+        width: 40px;
+        height: 40px;
+        border: 4px solid #ddd;
+        border-top-color: #22c55e;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
     </style>
     <div class="app-loading">
       <div class="spinner"></div>

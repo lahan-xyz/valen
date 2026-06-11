@@ -1,4 +1,4 @@
-import { Atom } from 'queflow'
+import { Atom } from 'valen'
 import Text from '../nuggets/Text.js'
 
 const QuestionCard = new Atom("QuestionCard", {

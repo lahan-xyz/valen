@@ -1,4 +1,4 @@
-import { App } from 'queflow'
+import { App } from 'valen'
 import AppView from './components/AppView.js'
 
 const JambApp = new App('#app', {
