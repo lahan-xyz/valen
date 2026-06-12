@@ -115,7 +115,7 @@ const AppView = new Component("AppView", {
       <header class="app-header">
         <h1 class="app-title">JAMB Past Questions</h1>
         <div class="app-controls">
-          <select aria-label="Select Subject" class="app-select" q:value=[ currentSubject ] onchange=[ 
+          <select aria-label="Select Subject" class="app-select" q:value=[ currentSubject ] @change=[ 
             const { value } = e.target;
             this.changeSubject(value);
            ]>
@@ -123,16 +123,16 @@ const AppView = new Component("AppView", {
           </select>
           <select aria-label="Select Year" class="app-select"
             q:value=[ currentYear ]
-            onchange=[
+            @change=[
             const { value } = e.target;
             this.changeYear(value);
           ]>
             ${YEARS.map(year => `<option value="${year}"  ${ year === data.currentYear ? 'selected' : '' }>${year}</option>`).join('')}
           </select>
           <div class="page-nav">
-            <button class="page-btn" onclick=[ this.previousPage() ]>← Prev</button>
+            <button class="page-btn" @click=[ this.previousPage() ]>← Prev</button>
             <span class="page-indicator">[ currentPage ] / [ totalPages ]</span>
-            <button class="page-btn" onclick=[ this.nextPage() ]>Next →</button>
+            <button class="page-btn" @click=[ this.nextPage() ]>Next →</button>
           </div>
         </div>
       </header>

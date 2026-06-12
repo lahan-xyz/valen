@@ -1,4 +1,4 @@
-/*!
+/*
  * Valen.js
  * (c) 2024-now Sodiq Tunde (lahan-xyz)
  * Released under the MIT License.
@@ -35,6 +35,8 @@ let currentTemplate = "",
 
 // Cached reactive elements
 const reactiveCache = new Map();
+
+const sharedTemplate = document.createElement('template');
 
 // LRU Cache class
 class LRUCache {
@@ -80,6 +82,8 @@ class LRUCache {
     return this._map.size;
   }
 }
+
+const b = (str, last) => stringBetween(str, "[", "]", last);
 
 
 // O(1) element lookup
@@ -198,8 +202,6 @@ function createSignal(data, object) {
   return createReactiveObject(item);
 }
 
-const b = (str, last) => stringBetween(str, "[", "]", last);
-
 
 // Extracts the string between two delimiters in a given string.
 function stringBetween(str, f, s, lastIndex) {
@@ -285,23 +287,22 @@ function lexTemplate(templateString) {
   for (let i = 0; i < templateString.length; i++) {
     const char = templateString[i];
     
-    // 1. SMART CONTEXT CHECK: Detect Native HTML Event Handlers
+    // 1. ABSOLUTE NATIVE EVENT SKIPPING
+    // Native 'on*' attributes are now strictly vanilla JS. We skip them completely
+    // to protect native array literals like [1, 2]. Custom directives like @click
+    // are ignored here and parsed beautifully below.
     if (depth === 0 && (char === '"' || char === "'")) {
       let j = i - 1;
-      
-      // Skip any trailing spaces between the attribute name, "=", and the quote
       while (j > 0 && /\s/.test(templateString[j])) j--;
       
       if (templateString[j] === '=') {
         j--;
         while (j > 0 && /\s/.test(templateString[j])) j--;
         
-        // Extract the attribute name
         let nameEnd = j + 1;
         while (j >= 0 && !/[\s=>/<{}]/.test(templateString[j])) j--;
         const attrName = templateString.slice(j + 1, nameEnd);
         
-        // If it's a native inline event handler, fast-forward to the closing quote
         if (attrName.startsWith('on')) {
           let closingIdx = i + 1;
           while (closingIdx < templateString.length) {
@@ -310,16 +311,15 @@ function lexTemplate(templateString) {
             }
             closingIdx++;
           }
-          
           if (closingIdx < templateString.length) {
-            i = closingIdx; // Skip the entire body of the event listener
+            i = closingIdx; // Skip the entire native JS event string safely
             continue;
           }
         }
       }
     }
     
-    // 2. SCOPED QUOTE TRACKING (For handling quotes INSIDE Valen expressions)
+    // 2. SCOPED QUOTE TRACKING (For quotes INSIDE Valen expressions)
     if (depth > 0 && (char === '"' || char === "'" || char === '`') && templateString[i - 1] !== '\\') {
       if (!inQuote) {
         inQuote = true;
@@ -602,11 +602,11 @@ const generateDataVA = (child, isParent, instance) => {
     value = value || '';
     
     let once = false;
-    const isEvent = attribute.startsWith("on");
+    const isEvent = attribute.startsWith("@");
     
     if (isEvent) {
       if(child.getAttribute(attribute)) {
-        child.setAttribute('data-v-on', attribute.slice(2));
+        child.setAttribute('data-v-on', attribute.slice(1));
         child.setAttribute('data-v-exp', value.trim());
         child.removeAttribute(attribute);
         continue;
@@ -893,11 +893,9 @@ function updateComponent(changedKey, instance) {
 
 
 function renderTemplate(input, props, shouldSanitize) {
-
   const chunks = lexTemplate(input);
-  
   if (!chunks.length || chunks.length === 1 && !chunks[0].isExpr) return input;
-  
+ 
   let combined = "";
     
   for (var i = 0, len = chunks.length; i < len; i++) {
@@ -927,7 +925,7 @@ function initiateNuggets(markup, isNugget) {
   
   // Shared cache for compiled props (across all calls)
   if (!initiateNuggets._propsCache) {
-    initiateNuggets._propsCache = new Map();
+    initiateNuggets._propsCache = new LRUCache();
   }
   
   const replacedMarkup = markup.replace(nuggetRegex, (match, name, propsString) => {
@@ -1007,7 +1005,7 @@ const initiateExtendedNuggets = (markup) => {
   
   // Props cache (static, shared across calls)
   if (!initiateExtendedNuggets._propsCache) {
-    initiateExtendedNuggets._propsCache = new Map();
+    initiateExtendedNuggets._propsCache = new LRUCache();
   }
   
   // Step 3: Iteratively replace all va-attrs elements (including new ones)
@@ -1112,13 +1110,13 @@ function initiateComponents(markup, isNugget, fromAtom) {
 
 
 const lintPlaceholders = (html, isNugget) => {
-  const eventRegex = /(on[\w]+)\s*=\s*\[((?:[^\[\]]|\[[^\[\]]*\])*)\]/g;
+  const eventRegex = /(@[\w]+)\s*=\s*\[((?:[^\[\]]|\[[^\[\]]*\])*)\]/g;
   const attributeRegex = /([\w-:]+)\s*=\s*\[((?:[^\[\]]|\[[^\[\]]*\])*)\]/g;
 
   // 1. Process Events
   if (!isNugget) {
     html = html.replace(eventRegex, (_, attrName, innerContent) => {
-      return `${attrName}='${innerContent.replaceAll("'", "`")}'`;
+      return `${attrName}="${innerContent.replaceAll("'", "`")}"`;
     });
   }
 
@@ -1189,7 +1187,6 @@ const renderComponent = (instance, name, flag) => {
   
   return rendered;
 };
-
 
 
 
@@ -1535,8 +1532,6 @@ function addIndexToTemplate(str, index, instance) {
   return instance ? evaluateTemplate(linted, instance) : linted;
 }
 
-
-const sharedTemplate = document.createElement('template');
 
 function g(str, className) {
   sharedTemplate.innerHTML = str;

@@ -7,10 +7,9 @@ const HelloWorld = new App('#app', {
   template: () => `
     <h1 color="#F7017A">Hello, World!<h1/>
     <div>[ text ]</div>
-    
     <input
       type="text"
-      oninput=[ data.text = e.target.value; ]
+      @input=[ data.text = e.target.value; ]
     />
     `,
   stylesheet: {
@@ -19,6 +18,9 @@ const HelloWorld = new App('#app', {
       padding: 0;
       box-sizing: border-box;
     `
+  },
+  run() {
+    
   }
 });
 
