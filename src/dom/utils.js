@@ -79,21 +79,31 @@ function scheduleFlush() {
   }
 }
 
+// A Map where Key = DOM Node, Value = Object of properties to update
+const updateMap = new Map();
+
 function batchedUpdate(child, key, evaluated) {
-  updateQueue.push({ child, key, evaluated });
+  if (!updateMap.has(child)) {
+    updateMap.set(child, {});
+  }
+  
+  // This overwrites previous identical keys, instantly deduping!
+  updateMap.get(child)[key] = evaluated;
+  
   scheduleFlush();
 }
 
 function flushUpdates() {
-  // Prevent re-entrancy if flush itself triggers more updates
-  const batch = [...updateQueue];
-  updateQueue.length = 0;
+  const batch = new Map(updateMap);
+  updateMap.clear();
   ctx.microtaskPending = false;
   
-  for (const { child, key, evaluated } of batch) {
-    // Guard: child may have been removed by a previous queued entry
+  for (const [child, mutations] of batch.entries()) {
     if (child?.isConnected) {
-      update(child, key, evaluated);
+      // Apply all accumulated mutations for this specific node
+      for (const key in mutations) {
+        update(child, key, mutations[key]);
+      }
     }
   }
 }

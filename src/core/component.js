@@ -1,5 +1,5 @@
 import { ctx, components } from '../internal.js';
-import { createSignal } from '../reactivity/utils.js';
+import { createSignal } from '../reactivity/signal.js';
 
 
 class Component {

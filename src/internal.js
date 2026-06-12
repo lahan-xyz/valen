@@ -5,7 +5,21 @@ export const GLOBAL_STATE = {
   dependencyMap: new Map()
 };
 
-export const updateQueue = [];
+// Inside src/reactivity.js
+export const updateQueue = new Set(); // Switch from [] to Set
+
+export function queueUpdate(effect) {
+  updateQueue.add(effect); // Automatically dedupes!
+  
+  if (!ctx.microtaskPending) {
+    ctx.microtaskPending = true;
+    queueMicrotask(() => {
+      updateQueue.forEach(effect => effect());
+      updateQueue.clear(); // Flush clean
+      ctx.microtaskPending = false;
+    });
+  }
+}
 
 export const components = new Map();
 export const nuggets = new Map();

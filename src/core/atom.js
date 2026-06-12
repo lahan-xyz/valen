@@ -1,6 +1,6 @@
 import { initiateStyleSheet, processComponentMarkup, stringToDocumentFragment, addToReactiveCache } from '../dom/utils.js';
 import { components } from '../internal.js'
-import { createSignal } from '../reactivity/utils.js';  
+import { createSignal } from '../reactivity/signal.js';
 import { addIndexToTemplate, initiateComponents } from '../parser/utils.js';  
 
 

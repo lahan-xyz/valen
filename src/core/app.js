@@ -1,4 +1,4 @@
-import { createSignal } from '../reactivity/utils.js';
+import { createSignal } from '../reactivity/signal.js';
 import { initiateStyleSheet, processComponentMarkup, addToReactiveCache, setupEventDelegation, strToEl } from '../dom/utils.js';
 import { initiateComponents, lintPlaceholders } from '../parser/utils.js';
 import { ctx, components } from '../internal.js';
