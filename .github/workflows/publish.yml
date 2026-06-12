@@ -1,0 +1,28 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published] # Triggers when you hit "Publish Release" on GitHub's website
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-node: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install & Build
+        run: |
+          npm install
+          # Optional: Add your build/minify step here if you have one (e.g., npm run build)
+
+      - name: Deploy to npm Registry
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

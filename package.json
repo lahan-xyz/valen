@@ -1,0 +1,41 @@
+{
+  "name": "@lahan-xyz/valen",
+  "version": "1.0.0",
+  "description": "A high-performance, buildless JavaScript library for atomic state management and surgical UI updates.",
+  "type": "module",
+  "main": "./src/valen.js",
+  "exports": {
+    ".": {
+      "import": "./src/valen.js"
+    }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "reactive",
+    "framework",
+    "frontend",
+    "proxies",
+    "valen",
+    "ui"
+  ],
+  "author": {
+    "name": "Tunde Gbolahan",
+    "email": "engineerlahan@gmail.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lahan-xyz/valen.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lahan-xyz/valen/issues"
+  },
+  "homepage": "https://github.com/lahan-xyz/valen#readme"
+}
