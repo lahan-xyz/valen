@@ -428,7 +428,6 @@ function wrapBareExpressions(root) {
 
 function processComponentMarkup(jsx, instance, subId) {
   sharedTemplate.innerHTML = jsx;
-  console.log(sharedTemplate.innerHTML)
   const fragment = sharedTemplate.content;
   
   wrapBareExpressions(fragment);

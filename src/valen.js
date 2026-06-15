@@ -1,10 +1,9 @@
 /*
  * Valen.js
- * (c) 2024-now Sodiq Tunde (lahan-xyz)
+ * (c) 2024-now Tunde Sodiq (lahan-xyz)
  * Released under the MIT License.
  */
 'use-strict';
-
 
 
 import { Store } from './reactivity/signal.js';
