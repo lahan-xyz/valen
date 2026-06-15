@@ -223,7 +223,7 @@ function initiateWidgets(markup, isWidget) {
       const instance = widgets.get(name);
       
       if (instance) {
-        evaluated = renderWidget(instance, d);
+        evaluated = instance(d);
       } else {
         console.warn(`Valen:\nWidget '${name}' is not defined`);
         evaluated = match; // leave original markup as fallback
@@ -270,27 +270,32 @@ function initiateComponents(markup, isWidget, fromAtom) {
 
 
 function g(str, className) {
-  sharedTemplate.innerHTML = str;
-  
-  const children = sharedTemplate.content.querySelectorAll("*");
-  
-  for (let i = 0, len = children.length; i < len; i++) {
-    children[i].classList.add(className);
-  }
-  
-  return sharedTemplate.innerHTML;
+  return str.replace(/<([a-zA-Z][a-zA-Z0-9\-]*)((?:\s+[^>]*?)?)(\/?>)/g, (match, tagName, attrs, ending) => {
+    // Already has class attribute?
+    const classRe = /\bclass\s*=\s*(["'])(.*?)\1/i;
+    const existing = attrs.match(classRe);
+    if (existing) {
+      // Append to existing class
+      const newClass = `${existing[2]} ${className}`;
+      attrs = attrs.replace(classRe, `class=${existing[1]}${newClass}${existing[1]}`);
+    } else {
+      // Add class attribute before the ending
+      attrs += ` class="${className}"`;
+    }
+    return `<${tagName}${attrs}${ending}`;
+  });
 }
 
 
 
-const renderWidget = (instance, data, isExtended, children) => {
+const renderWidget = (instance, data, children) => {
   if (instance) {
+    // Create a variable that holds the template
     const className = instance.className;
-    // Create a variable that holds the template 
     let template = instance.template instanceof Function ? instance.template(data) : instance.template;
     
-    if (isExtended) {
-      template = template.replaceAll("</>", children);
+    if (children) {
+      template = template.replaceAll("</>", children || "");
     }
     
     // Parse and initiate Nested Widgets
@@ -300,69 +305,90 @@ const renderWidget = (instance, data, isExtended, children) => {
     let rendered = renderTemplate(initiated, data);
     
     const html = g(rendered, className);
-    if (!instance.stylesheetInitiated) {
-      // Initiate stylesheet for instance 
-      initiateStyleSheet("." + className, instance, true);
-      instance.stylesheetInitiated = true;
-    }
-    
+  
     // Return processed html
     return html;
   }
 }
 
 
-// Sanitizes a string to prevent potential XSS attacks.
+// Pre‑computed lookup for HTML entities
+const htmlEscapeMap = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
+};
+
+// Static replacer function (created once, reused)
+function htmlEscapeReplacer(match) {
+  return htmlEscapeMap[match];
+}
+
 function sanitizeString(str) {
   str = String(str);
   
-  // Single‑pass regex: escape HTML special chars & remove "javascript:"
-  return str.replace(/[&<>"']|javascript:/gi, match => {
-    switch (match) {
-      case '&':
-        return '&amp;';
-      case '<':
-        return '&lt;';
-      case '>':
-        return '&gt;';
-      case '"':
-        return '&quot;';
-      case "'":
-        return '&#39;';
-      default: // matched "javascript:" (case‑insensitive)
-        return '';
-    }
-  });
+  // 1. Escape only the five dangerous HTML characters (fast regex, no case‑insensitive)
+  str = str.replace(/[&<>"']/g, htmlEscapeReplacer);
+  
+  // 2. Strip any "javascript:" substrings (case‑insensitive)
+  //    This is a simple string‑removal pass, far cheaper than mixing it into the first regex.
+  str = str.replace(/javascript:/gi, '');
+  
+  return str;
+}
+
+
+
+// Caches for compiled property accessors
+const getterCache = new LRUCache();
+
+// Helper that returns a cached function to access nested properties
+function getValueFromPath(obj, path) {
+  let getter = getterCache.get(path);
+  if (!getter) {
+    // Create a compiled function once per unique path
+    getter = new Function("data", `return data.${path}`);
+    getterCache.set(path, getter);
+  }
+  return getter(obj);
 }
 
 
 
 function renderTemplate(input, props, shouldSanitize) {
   const chunks = lexTemplate(input);
-  if (!chunks.length || chunks.length === 1 && !chunks[0].isExpr) return input;
   
-  let combined = "";
+  // Early return if there's nothing to interpolate
+  if (!chunks.length || (chunks.length === 1 && !chunks[0].isExpr)) {
+    return input;
+  }
   
-  for (var i = 0, len = chunks.length; i < len; i++) {
-    const chunk = chunks[i],
-      val = chunk.val;
+  // 2. Use array + join instead of repeated string concatenation
+  const parts = [];
+  
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const val = chunk.val;
     
     if (!chunk.isExpr) {
-      combined += val;
+      parts.push(val);
       continue;
     }
     
     const trimmed = val.trim();
-    const value = props[trimmed];
+    const value = getValueFromPath(props, trimmed);
     
+    // 3. Fix bug: only add placeholder when value is missing, not both
     if (value === undefined || value === null) {
-      combined += `[${val}]`; // keep placeholder for debugging
+      parts.push(`[${val}]`);
+    } else {
+      parts.push(shouldSanitize ? sanitizeString(value) : value);
     }
-    
-    combined += shouldSanitize ? sanitizeString(value) : value;
   }
   
-  return combined;
+  return parts.join('');
 }
 
 
@@ -463,7 +489,7 @@ const initiateExtendedWidgets = (markup) => {
         }
         
         // Render the widget
-        const replacementHTML = renderWidget(instance, data, true, content);
+        const replacementHTML = instance(data, content);
         const replacementFragment = range.createContextualFragment(replacementHTML);
         
         // Replace the element in‑place

@@ -183,7 +183,6 @@ function initiateStyleSheet(selector = "", instance = {}, shouldSwitch) {
   
   // Convert the instance's stylesheet into a CSS string
   let styles = objToStyle(selector, instance.stylesheet, "", shouldSwitch);
-  
   // Append the stylesheet to the document head if not already appended
   if (!stylesheet.isAppended) {
     document.head.appendChild(stylesheet.el);

@@ -1,43 +1,42 @@
-import { ctx, widgets } from '../internal.js'
+import { widgets } from '../internal.js'
+import { renderWidget } from '../parser/utils.js';
+import { initiateStyleSheet } from '../dom/utils.js';
 
-class Widget {
-  /**
-   * A class for creating reusable UI components
-   * @param {Object} options    An object containing all required options for the component
-   */
+
+/**
+ * Valen Widget Higher-Order Function
+ */
+export default function Widget(WidgetFunc) {
+  // 1. The Gatekeeper Flag
+  let cssInjected = false;
   
-  // 1. Declare strict private fields
-  #className;
-  #template;
+  const widgetName = WidgetFunc.name;
   
-  constructor(name, options = {}) {
-    // Stores instance's stylesheet 
-    this.stylesheet = options.stylesheet ?? {};
-    
-    // Create a property that generates a unique className for instance's parent element
-    this.#className = `widget${ctx.widgetCounter}`;
-    
-    // Increment the ctx.widgetCounter variable for later use
-    ctx.widgetCounter++;
-    
-    // Stores template 
-    this.#template = options.template;
-    this.stylesheetInitiated = false;
-    
-    widgets.set(name, this);
+  if (!widgetName || widgetName === "anonymous") {
+    throw new Error(`[Valen] Widgets must be named functions. Example: function Button() {}`);
   }
   
-  // 2. Expose read-only public getters
-  get className() { return this.#className; }
-  get template() { return this.#template; }
+  // 2. The Execution Function
+  const func = (props = {}, children = "") => {
+    // Generate the raw component object
+    const instance = WidgetFunc(props);
+    instance.className = widgetName;
+    
+    // 3. The One-Time CSS Evaluation
+    if (instance.stylesheet && !cssInjected) {
+      initiateStyleSheet("."+widgetName, instance, true); // Inject styles to the <head>
+      cssInjected = true; // Lock the gate forever for this component type
+    }
+    
+    // 4. Clean up the object before passing it to the parser to save memory
+    instance.stylesheet = null;
+    
+    // 5. Pass only what is necessary to the renderer
+    return renderWidget(instance, props, children);
+  };
   
-  destroy() {
-    // 3. Query safely utilizing the internal private field
-    const all = document.querySelectorAll(`.${this.#className}`);
-    // Remove elements and their events from the DOM
-    removeEvents(all, true);
-  }
+  // Register globally for template interpolation
+  widgets.set(widgetName, func);
+  
+  return func;
 }
-
-
-export default Widget;

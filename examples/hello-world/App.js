@@ -3,7 +3,6 @@ import { App } from 'valen'
 const HelloWorld = new App('#app', {
   template: () => `
     <h1>Hello, World!</h1>
-    <h1>Hello, World!</h1>
     `,
   stylesheet: {
     "html": `

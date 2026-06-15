@@ -21,16 +21,6 @@ export function queueUpdate(effect) {
   }
 }
 
-export const components = new Map();
-export const widgets = new Map();
-export const reactiveCache = new Map();
-
-export const stylesheet = {
-  el: typeof document !== 'undefined' ? document.createElement("style") : null,
-  isAppended: false
-};
-
-export const sharedTemplate = typeof document !== 'undefined' ? document.createElement('template') : null;
 
 // LRU Cache class
 export class LRUCache {
@@ -77,6 +67,19 @@ export class LRUCache {
   }
 }
 
+
+export const components = new Map();
+export const widgets = new Map();
+export const reactiveCache = new LRUCache();
+
+export const stylesheet = {
+  el: typeof document !== 'undefined' ? document.createElement("style") : null,
+  isAppended: false
+};
+
+export const sharedTemplate = typeof document !== 'undefined' ? document.createElement('template') : null;
+
+
 // Extracts the string between two delimiters in a given string.
 export function stringBetween(str, f, s, lastIndex) {
   const indx1 = str.indexOf(f);
@@ -91,7 +94,6 @@ export function stringBetween(str, f, s, lastIndex) {
 // For primitives and variables that get completely overwritten/reassigned
 export const ctx = {
   counterVA: 0,
-  widgetCounter: 0,
   routerObj: {},
   currentComponent: null,
   navigateFunc: () => {},

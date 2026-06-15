@@ -1,10 +1,11 @@
 {
   "name": "@lahan-xyz/valen",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A high-performance, buildless JavaScript library for atomic state management and surgical UI updates.",
   "type": "module",
   "main": "./src/valen.js",
   "exports": {
+    "default": "./src/valen.js",
     ".": {
       "import": "./src/valen.js"
     }

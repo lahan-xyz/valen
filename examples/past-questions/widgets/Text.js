@@ -1,23 +1,23 @@
 import { Widget } from 'valen';
 
-const Text = new Widget ('Text', {
-  template: (data) => {
-    data.color = data.color || "dodgerblue"
-    data.align = data.align || "center"
-    data.size = data.size || 20
-    
-    
-    return (`
-      <span color=[ color ] text-align=[ align ] font-size="[ size ]px" onclick=[ click ]>[ txt ] </> 
-      </span>
+function Text() {
+  return {
+    template() {
+      return (`
+      <span
+        color=[ color || "dodgerblue" ]
+        text-align=[ align || "center" ]
+        font-size="[ size || 20 ]px"
+        >[ txt ]</span>
     `)
-  },
-  stylesheet: {
-    'span': `
-      font-weight: 500;
-      display: block;
+    },
+    stylesheet: {
+      'span': `
+        font-weight: 600;
+        display: block;
     `
+    }
   }
-})
+}
 
-export default Text;
+export default Widget(Text);
