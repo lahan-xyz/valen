@@ -7,10 +7,10 @@
 
 
 
-import { globalState } from './reactivity/signal.js';
+import { Store } from './reactivity/signal.js';
 import App from './core/app.js';
 import Component from './core/component.js';
-import Nugget from './core/nugget.js';
+import Widget from './core/widget.js';
 
 import Atom from './core/atom.js';
 
@@ -18,7 +18,7 @@ import Atom from './core/atom.js';
 export {
   App,
   Component,
-  Nugget,
+  Widget,
   Atom,
-  globalState
+  Store
 };

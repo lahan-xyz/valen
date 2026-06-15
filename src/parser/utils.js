@@ -1,27 +1,38 @@
-import { ctx, components, LRUCache, sharedTemplate, stringBetween, updateQueue, nuggets } from '../internal.js';
+import { ctx, components, LRUCache, sharedTemplate, stringBetween, updateQueue, widgets } from '../internal.js';
 import { renderComponent, initiateStyleSheet } from '../dom/utils.js';
 
 
 
-const lintPlaceholders = (html, isNugget) => {
+const lintPlaceholders = (html, isWidget) => {
   const eventRegex = /(@[\w]+)\s*=\s*\[((?:[^\[\]]|\[[^\[\]]*\])*)\]/g;
   const attributeRegex = /([\w-:]+)\s*=\s*\[((?:[^\[\]]|\[[^\[\]]*\])*)\]/g;
-
+  
   // 1. Process Events
-  if (!isNugget) {
+  if (!isWidget) {
     html = html.replace(eventRegex, (_, attrName, innerContent) => {
-      return `${attrName}="${innerContent.replaceAll("'", "`")}"`;
+        return `${attrName}="${innerContent.replaceAll("'", "`")}"`;
     });
   }
 
   // 2. Process Directives & Standard Attributes
   return html.replace(attributeRegex, (_, attrName, innerContent) => {
-    return `${attrName}="[${innerContent}]"`;
+    return `${ attrName } = "[${innerContent}]"`;
   });
 };
 
-
 const lexerCache = new LRUCache(500);
+
+// Pre-calculated ASCII constants for V8 optimization
+const C_SPACE = 32, C_TAB = 9, C_NL = 10, C_CR = 13;
+const C_EQ = 61, C_GT = 62, C_LT = 60, C_SLASH = 47, C_BRACKET_OPEN = 91;
+
+function isWhitespace(code) {
+  return code === C_SPACE || code === C_TAB || code === C_NL || code === C_CR;
+}
+
+function isBoundary(code) {
+  return isWhitespace(code) || code === C_EQ || code === C_GT || code === C_LT || code === C_SLASH;
+}
 
 function lexTemplate(templateString) {
   if (lexerCache.has(templateString)) {
@@ -29,61 +40,70 @@ function lexTemplate(templateString) {
   }
   
   const chunks = [];
+  const len = templateString.length;
   let depth = 0;
   let inQuote = false;
-  let quoteChar = null;
+  let quoteCode = 0;
   let startIdx = 0;
   let exprStart = -1;
   
-  for (let i = 0; i < templateString.length; i++) {
-    const char = templateString[i];
+  let currentAttrName = '';
+  let gatheringAttrName = false;
+  let attrNameStart = 0;
+
+  for (let i = 0; i < len; i++) {
+    const code = templateString.charCodeAt(i);
     
-    // 1. ABSOLUTE NATIVE EVENT SKIPPING
-    // Native 'on*' attributes are now strictly vanilla JS. We skip them completely
-    // to protect native array literals like [1, 2]. Custom directives like @click
-    // are ignored here and parsed beautifully below.
-    if (depth === 0 && (char === '"' || char === "'")) {
-      let j = i - 1;
-      while (j > 0 && /\s/.test(templateString[j])) j--;
-      
-      if (templateString[j] === '=') {
-        j--;
-        while (j > 0 && /\s/.test(templateString[j])) j--;
-        
-        let nameEnd = j + 1;
-        while (j >= 0 && !/[\s=>/<{}]/.test(templateString[j])) j--;
-        const attrName = templateString.slice(j + 1, nameEnd);
-        
-        if (attrName.startsWith('on')) {
-          let closingIdx = i + 1;
-          while (closingIdx < templateString.length) {
-            if (templateString[closingIdx] === char && templateString[closingIdx - 1] !== '\\') {
-              break;
-            }
-            closingIdx++;
+    // Track HTML attribute names
+    if (depth === 0) {
+      if (isBoundary(code) && code !== C_EQ) {
+        gatheringAttrName = true;
+        attrNameStart = i + 1;
+      } else if (code === C_EQ) {
+        gatheringAttrName = false;
+        currentAttrName = templateString.slice(attrNameStart, i).trim();
+      }
+    }
+    
+    // 1. NATIVE EVENT SKIPPING ONLY
+    // We removed the '@' check! Now it ONLY skips native DOM events like 'onclick'.
+    // This allows Valen to dive into @change="[ ... ]" and extract your signal logic.
+    if (depth === 0 && (code === 34 || code === 39)) { 
+      if (currentAttrName.startsWith('on')) {
+        let closingIdx = i + 1;
+        while (closingIdx < len) {
+          if (templateString.charCodeAt(closingIdx) === code && templateString.charCodeAt(closingIdx - 1) !== 92) { 
+            break;
           }
-          if (closingIdx < templateString.length) {
-            i = closingIdx; // Skip the entire native JS event string safely
-            continue;
-          }
+          closingIdx++;
+        }
+        if (closingIdx < len) {
+          i = closingIdx;
+          continue;
         }
       }
     }
     
-    // 2. SCOPED QUOTE TRACKING (For quotes INSIDE Valen expressions)
-    if (depth > 0 && (char === '"' || char === "'" || char === '`') && templateString[i - 1] !== '\\') {
+    // 2. INTERNAL QUOTE TRACKING
+    if (depth > 0 && (code === 34 || code === 39 || code === 96) && templateString.charCodeAt(i - 1) !== 92) {
       if (!inQuote) {
         inQuote = true;
-        quoteChar = char;
-      } else if (quoteChar === char) {
+        quoteCode = code;
+      } else if (quoteCode === code) {
         inQuote = false;
-        quoteChar = null;
+        quoteCode = 0;
       }
     }
     
-    // 3. BRACKET TRACKING
+    // 3. STRUCTURAL BRACKET TRACKING
     if (!inQuote) {
-      if (char === '[') {
+      if (code === 91) { // '['
+        
+        const prevCode = templateString.charCodeAt(i - 1);
+        if (depth === 0 && (prevCode === 45 || prevCode === 58)) {
+          continue; // Skip static CSS framework classes
+        }
+
         if (depth === 0) {
           if (startIdx < i) {
             chunks.push({ isExpr: false, val: templateString.slice(startIdx, i) });
@@ -91,10 +111,9 @@ function lexTemplate(templateString) {
           exprStart = i;
         }
         depth++;
-      } else if (char === ']') {
+      } else if (code === 93) { // ']'
         if (depth > 0) {
           depth--;
-          
           if (depth === 0) {
             chunks.push({ isExpr: true, val: templateString.slice(exprStart + 1, i) });
             startIdx = i + 1;
@@ -104,14 +123,14 @@ function lexTemplate(templateString) {
     }
   }
   
-  // 4. CLEANUP
-  if (startIdx < templateString.length) {
+  if (startIdx < len) {
     chunks.push({ isExpr: false, val: templateString.slice(startIdx) });
   }
   
   lexerCache.set(templateString, chunks);
   return chunks;
 }
+
 
 
 const ENTITY_REGEX = /&(gt|lt);/g;
@@ -150,48 +169,44 @@ function evaluateTemplate(templateString, instance) {
     
     if (!evaluator) {
       try {
-        // PERFORMANCE KEY: We pass `data` as a direct parameter to the Function.
-        // This is significantly faster and safer than `with(this.data)`.
-        const source = isGlobal ?
-          `return ${ext};` :
-          `with (data) { return ${ext}; }`;
+        const source = isGlobal ? ` return ${ ext };` : `with(data) { return ${ ext }; }`;
         
         // Pass 'data' as the argument name
         evaluator = new Function("data", source);
         evaluatorCache.set(ext, evaluator);
       } catch (err) {
-        console.warn(`Valen Syntax Error in \`${innerContent}\`\n`, err);
-        combinedHTML += `[${innerContent}]`; // Output raw bracket if it fails
-        continue;
-      }
-    }
-    
-    try {
-      // Pass instance.data directly into the function execution
-      const parsed = isGlobal ? evaluator() : evaluator.call(instance, instance.data);
-      
-      if (parsed != null && !Number.isNaN(parsed)) {
-        combinedHTML += parsed;
-      }
-    } catch (error) {
-      console.warn(`Valen Execution Error in \`${innerContent}\`\n`, error);
+        console.warn(`
+        Valen Syntax Error in \`${innerContent}\`\n`, err); combinedHTML += `[${innerContent}]`; // Output raw bracket if it fails
+      continue;
     }
   }
   
-  ctx.currentTemplate = "";
-  return combinedHTML;
+  try {
+    // Pass instance.data directly into the function execution
+    const parsed = isGlobal ? evaluator() : evaluator.call(instance, instance.data);
+    
+    if (parsed != null && !Number.isNaN(parsed)) {
+      combinedHTML += parsed;
+    }
+  } catch (error) {
+    console.warn(`Valen Execution Error in \`${innerContent}\`\n`, error);
+  }
+}
+
+ctx.currentTemplate = "";
+return combinedHTML;
 }
 
 
-function initiateNuggets(markup, isNugget) {
-  const nuggetRegex = /<([A-Z]\w*)\s*\{([\s\S]*?)\}\s*\/>/g;
+function initiateWidgets(markup, isWidget) {
+  const widgetRegex = /<([A-Z]\w*)\s*\{([\s\S]*?)\}\s*\/>/g;
   
   // Shared cache for compiled props (across all calls)
-  if (!initiateNuggets._propsCache) {
-    initiateNuggets._propsCache = new LRUCache();
+  if (!initiateWidgets._propsCache) {
+    initiateWidgets._propsCache = new LRUCache();
   }
   
-  const replacedMarkup = markup.replace(nuggetRegex, (match, name, propsString) => {
+  const replacedMarkup = markup.replace(widgetRegex, (match, name, propsString) => {
     // propsString = the object literal inside { } (trimmed later)
     const trimmedProps = `{ ${propsString.trim()} }`;
     const cacheKey = `${propsString.trim()}`;
@@ -199,38 +214,38 @@ function initiateNuggets(markup, isNugget) {
     let evaluated;
     try {
       // Retrieve or compile the props function
-      let propsFn = initiateNuggets._propsCache.get(cacheKey);
+      let propsFn = initiateWidgets._propsCache.get(cacheKey);
       if (!propsFn) {
         propsFn = new Function(`return ${trimmedProps}`);
-        initiateNuggets._propsCache.set(cacheKey, propsFn);
+        initiateWidgets._propsCache.set(cacheKey, propsFn);
       }
       const d = propsFn();
-      const instance = nuggets.get(name);
+      const instance = widgets.get(name);
       
       if (instance) {
-        evaluated = renderNugget(instance, d);
+        evaluated = renderWidget(instance, d);
       } else {
-        console.warn(`Valen:\nNugget '${name}' is not defined`);
+        console.warn(`Valen:\nWidget '${name}' is not defined`);
         evaluated = match; // leave original markup as fallback
       }
     } catch (e) {
-      console.warn(`Valen:\nAn error occured while rendering Nugget '${name}': ${e}\n\nError sourced from: \`${match}\``);
+      console.warn(`Valen:\nAn error occured while rendering Widget '${name}': ${e}\n\nError sourced from: \`${match}\``);
       evaluated = match; // keep original on error
     }
     return evaluated;
   });
   
-  return lintPlaceholders(replacedMarkup, isNugget);
+  return lintPlaceholders(replacedMarkup, isWidget);
 }
 
 
 const COMPONENT_SELF_CLOSING_REGEX = /<([A-Z]\w*)\s*\/>/g;
 
-function initiateComponents(markup, isNugget, fromAtom) {
-  markup = lintPlaceholders(markup, isNugget);
+function initiateComponents(markup, isWidget, fromAtom) {
+  markup = lintPlaceholders(markup, isWidget);
   
-  // If not a nugget, replace self-closing component tags with rendered output
-  if (!isNugget && !fromAtom) {
+  // If not a widget, replace self-closing component tags with rendered output
+  if (!isWidget && !fromAtom) {
     markup = markup.replace(COMPONENT_SELF_CLOSING_REGEX, (match, tagName) => {
       const instance = components.get(tagName);
       if (!instance) {
@@ -246,11 +261,11 @@ function initiateComponents(markup, isNugget, fromAtom) {
     });
   }
   
-  // After components, process nuggets
-  markup = initiateNuggets(markup);
-  markup = initiateExtendedNuggets(markup);
-
-  return lintPlaceholders(markup, isNugget);
+  // After components, process widgets
+  markup = initiateWidgets(markup);
+  markup = initiateExtendedWidgets(markup);
+ 
+  return lintPlaceholders(markup, isWidget);
 }
 
 
@@ -268,7 +283,7 @@ function g(str, className) {
 
 
 
-const renderNugget = (instance, data, isExtended, children) => {
+const renderWidget = (instance, data, isExtended, children) => {
   if (instance) {
     const className = instance.className;
     // Create a variable that holds the template 
@@ -278,8 +293,8 @@ const renderNugget = (instance, data, isExtended, children) => {
       template = template.replaceAll("</>", children);
     }
     
-    // Parse and initiate Nested Nuggets
-    const initiated = initiateNuggets(template, true);
+    // Parse and initiate Nested Widgets
+    const initiated = initiateWidgets(template, true);
     
     // Render parsed html
     let rendered = renderTemplate(initiated, data);
@@ -361,110 +376,115 @@ function getDepth(node) {
   return depth;
 }
 
-function clearAllNuggetCaches() {
-  initiateNuggets._propsCache?.clear();
-  initiateExtendedNuggets._propsCache?.clear();
+function clearAllWidgetCaches() {
+  initiateWidgets._propsCache?.clear();
+  initiateExtendedWidgets._propsCache?.clear();
 }
 
-const initiateExtendedNuggets = (markup) => {
-  // Step 1: Convert component tags to custom elements with va-attrs
-  const componentRegex = /<(\/?[A-Z]\w*)(\s*\(\{[\s\S]*?}\))?\s*>/g;
-  const convertedMarkup = markup.replace(componentRegex, (match, p1, p2) => {
-    const isClosing = match.startsWith('</');
-    const tagName = p1
-      .replace(/([A-Z])/g, '-$1')
-      .toLowerCase()
-      .replace(/^-/, '');
-    
-    if (isClosing) {
-      return `</${tagName.slice(2)}>`; // keep original closing logic
-    }
-    
-    const attrs = (p2 || '')
-      .replace(/\(\{/g, '{')
-      .replace(/\}\)/g, '}')
-      .replace(/"/g, '`');
-    
-    return `<${tagName} va-attrs="${attrs}">`;
-  });
-  
-  // Step 2: Parse into a DocumentFragment
-  const range = document.createRange();
-  const fragment = range.createContextualFragment(convertedMarkup);
-  
-  // Props cache (static, shared across calls)
-  if (!initiateExtendedNuggets._propsCache) {
-    initiateExtendedNuggets._propsCache = new LRUCache();
-  }
-  
-  // Step 3: Iteratively replace all va-attrs elements (including new ones)
-  let hasComponents = true;
-  while (hasComponents) {
-    hasComponents = false;
-    
-    // Collect all elements with va-attrs, deepest first
-    const elements = fragment.querySelectorAll('[va-attrs]');
-    if (elements.length === 0) break;
-    
-    // Convert NodeList to array, sort by depth (descending)
-    const sorted = Array.from(elements).sort((a, b) => {
-      const depthA = getDepth(a);
-      const depthB = getDepth(b);
-      return depthB - depthA; // deepest first
-    });
-    
-    for (const element of sorted) {
-      // Only process if still in the DOM (could have been replaced by a parent)
-      if (!element.parentNode) continue;
+const componentRegex = /<(\/?[A-Z]\w*)(\s*\(\{[\s\S]*?}\))?\s*>/g;
+
+const initiateExtendedWidgets = (markup) => {
+  if (componentRegex.test(markup)) {
+    // Step 1: Convert component tags to custom elements with va-attrs
+    const convertedMarkup = markup.replace(componentRegex, (match, p1, p2) => {
+      const isClosing = match.startsWith('</');
+      const tagName = p1
+        .replace(/([A-Z])/g, '-$1')
+        .toLowerCase()
+        .replace(/^-/, '');
       
-      const originalTag = element.tagName.toLowerCase()
-        .replace(/-([a-z])/g, (_, c) => c.toUpperCase())
-        .replace(/^./, m => m.toUpperCase());
-      const attrs = element.getAttribute('va-attrs');
-      const content = element.innerHTML;
-      const instance = nuggets.get(originalTag);
-      
-      if (!instance) {
-        console.warn(`Valen:\nNugget '${originalTag}' is not defined`);
-        element.removeAttribute('va-attrs');
-        continue;
+      if (isClosing) {
+        return `</${tagName.slice(2)}>`; // keep original closing logic
       }
       
-      // Compile props (cached)
-      let data;
-      if (initiateExtendedNuggets._propsCache.has(attrs)) {
-        data = initiateExtendedNuggets._propsCache.get(attrs);
-      } else {
-        try {
-          data = new Function(`return ${attrs}`)();
-          initiateExtendedNuggets._propsCache.set(attrs, data);
-        } catch (e) {
-          console.warn(`Valen:\nFailed to parse props for ${originalTag}: ${e}`);
+      const attrs = (p2 || '')
+        .replace(/\(\{/g, '{')
+        .replace(/\}\)/g, '}')
+        .replace(/"/g, '`');
+      
+      return `<${tagName} va-attrs="${attrs}">`;
+    });
+    
+    // Step 2: Parse into a DocumentFragment
+    const range = document.createRange();
+    const fragment = range.createContextualFragment(convertedMarkup);
+    
+    // Props cache (static, shared across calls)
+    if (!initiateExtendedWidgets._propsCache) {
+      initiateExtendedWidgets._propsCache = new LRUCache();
+    }
+    
+    // Step 3: Iteratively replace all va-attrs elements (including new ones)
+    let hasComponents = true;
+    while (hasComponents) {
+      hasComponents = false;
+      
+      // Collect all elements with va-attrs, deepest first
+      const elements = fragment.querySelectorAll('[va-attrs]');
+      if (elements.length === 0) break;
+      
+      // Convert NodeList to array, sort by depth (descending)
+      const sorted = Array.from(elements).sort((a, b) => {
+        const depthA = getDepth(a);
+        const depthB = getDepth(b);
+        return depthB - depthA; // deepest first
+      });
+      
+      for (const element of sorted) {
+        // Only process if still in the DOM (could have been replaced by a parent)
+        if (!element.parentNode) continue;
+        
+        const originalTag = element.tagName.toLowerCase()
+          .replace(/-([a-z])/g, (_, c) => c.toUpperCase())
+          .replace(/^./, m => m.toUpperCase());
+        const attrs = element.getAttribute('va-attrs');
+        const content = element.innerHTML;
+        const instance = widgets.get(originalTag);
+        
+        if (!instance) {
+          console.warn(`Valen:\nWidget '${originalTag}' is not defined`);
           element.removeAttribute('va-attrs');
           continue;
         }
+        
+        // Compile props (cached)
+        let data;
+        if (initiateExtendedWidgets._propsCache.has(attrs)) {
+          data = initiateExtendedWidgets._propsCache.get(attrs);
+        } else {
+          try {
+            data = new Function(`return ${attrs}`)();
+            initiateExtendedWidgets._propsCache.set(attrs, data);
+          } catch (e) {
+            console.warn(`Valen:\nFailed to parse props for ${originalTag}: ${e}`);
+            element.removeAttribute('va-attrs');
+            continue;
+          }
+        }
+        
+        // Render the widget
+        const replacementHTML = renderWidget(instance, data, true, content);
+        const replacementFragment = range.createContextualFragment(replacementHTML);
+        
+        // Replace the element in‑place
+        element.parentNode.replaceChild(replacementFragment, element);
+        
+        // Since we've inserted new DOM, we need to re‑scan in the next while iteration
+        hasComponents = true;
       }
-      
-      // Render the nugget
-      const replacementHTML = renderNugget(instance, data, true, content);
-      const replacementFragment = range.createContextualFragment(replacementHTML);
-      
-      // Replace the element in‑place
-      element.parentNode.replaceChild(replacementFragment, element);
-      
-      // Since we've inserted new DOM, we need to re‑scan in the next while iteration
-      hasComponents = true;
     }
+    
+    // Step 4: Serialize the final fragment
+    const div = document.createElement('div');
+    div.appendChild(fragment);
+    const finalMarkup = div.innerHTML;
+    div.remove();
+    
+    // Step 5: Let normal widgets be processed
+    return initiateWidgets(finalMarkup);
+  } else {
+    return markup;
   }
-  
-  // Step 4: Serialize the final fragment
-  const div = document.createElement('div');
-  div.appendChild(fragment);
-  const finalMarkup = div.innerHTML;
-  div.remove();
-  
-  // Step 5: Let normal nuggets be processed
-  return initiateNuggets(finalMarkup);
 };
 
 function addIndexToTemplate(str, index, instance) {
@@ -493,4 +513,4 @@ function addIndexToTemplate(str, index, instance) {
 }
 
 
-export { lexTemplate, evaluateTemplate, initiateComponents, initiateNuggets, renderNugget, renderTemplate, initiateExtendedNuggets, lintPlaceholders, addIndexToTemplate }
+export { lexTemplate, evaluateTemplate, initiateComponents, initiateWidgets, renderWidget, renderTemplate, initiateExtendedWidgets, lintPlaceholders, addIndexToTemplate }

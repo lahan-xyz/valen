@@ -1,6 +1,6 @@
-import { ctx, nuggets } from '../internal.js'
+import { ctx, widgets } from '../internal.js'
 
-class Nugget {
+class Widget {
   /**
    * A class for creating reusable UI components
    * @param {Object} options    An object containing all required options for the component
@@ -15,16 +15,16 @@ class Nugget {
     this.stylesheet = options.stylesheet ?? {};
     
     // Create a property that generates a unique className for instance's parent element
-    this.#className = `nugget${ctx.nuggetCounter}`;
+    this.#className = `widget${ctx.widgetCounter}`;
     
-    // Increment the ctx.nuggetCounter variable for later use
-    ctx.nuggetCounter++;
+    // Increment the ctx.widgetCounter variable for later use
+    ctx.widgetCounter++;
     
     // Stores template 
     this.#template = options.template;
     this.stylesheetInitiated = false;
     
-    nuggets.set(name, this);
+    widgets.set(name, this);
   }
   
   // 2. Expose read-only public getters
@@ -40,4 +40,4 @@ class Nugget {
 }
 
 
-export default Nugget;
+export default Widget;

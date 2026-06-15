@@ -151,11 +151,12 @@ function objToStyle(selector = "", obj = {}, alt = "", shouldSwitch) {
     // Guard against non-object/non-string values
     if (typeof value !== "string" && typeof value !== "object") continue;
     
-    const isKeyframes = key.includes("@keyframes");
-    const isFontFace = key.includes("@font-face");
-    const isSpecialAtRule = isKeyframes || isFontFace;
-    const isMedia = alt.includes("@media");
-    const isRegularRule = !isSpecialAtRule && !isMedia;
+    // Fast character code check: 64 is '@'
+    const isAtRule = key.charCodeAt(0) === 64;
+    
+    // We only need to know if it's a media query for the alt check
+    const isMedia = alt.charCodeAt(0) === 64 && alt.startsWith("@media");
+    const isRegularRule = !isAtRule && !isMedia;
     
     if (typeof value === "string") {
       // Build rule: either "selector key { value }" or "key selector { value }"
@@ -165,8 +166,7 @@ function objToStyle(selector = "", obj = {}, alt = "", shouldSwitch) {
       
       lines.push(rule);
     } else {
-      // Nested at-rule (e.g., @media, @keyframes with object body)
-      // Recursively process, but only once we've opened the block
+      // Nested at-rule recursively processed
       lines.push(`${key} {`);
       lines.push(objToStyle(selector, value, key, shouldSwitch));
       lines.push(`}`);
@@ -179,17 +179,20 @@ function objToStyle(selector = "", obj = {}, alt = "", shouldSwitch) {
 
 // Function to initiate the stylesheet
 function initiateStyleSheet(selector = "", instance = {}, shouldSwitch) {
+  if (!instance.stylesheet) return;
+  
   // Convert the instance's stylesheet into a CSS string
   let styles = objToStyle(selector, instance.stylesheet, "", shouldSwitch);
-  
-  // Append the styles to the stylesheet element
-  stylesheet.el.textContent += styles;
   
   // Append the stylesheet to the document head if not already appended
   if (!stylesheet.isAppended) {
     document.head.appendChild(stylesheet.el);
     stylesheet.isAppended = true;
   }
+  
+  // High-Performance Injection: 
+  // Appending a text node prevents the browser from re-parsing previously injected CSS
+  stylesheet.el.appendChild(document.createTextNode(styles + "\n"));
   
   instance.stylesheet = null;
 }
@@ -425,10 +428,10 @@ function wrapBareExpressions(root) {
 
 function processComponentMarkup(jsx, instance, subId) {
   sharedTemplate.innerHTML = jsx;
+  console.log(sharedTemplate.innerHTML)
   const fragment = sharedTemplate.content;
   
   wrapBareExpressions(fragment);
-  
   const data = [];
   
   try {

@@ -51,7 +51,7 @@ function createSignal(data, object) {
 
 
 
-const globalState = (name, val, shouldStore) => {
+const Store = (name, val, shouldStore) => {
   let stored;
   if (shouldStore) {
     stored = localStorage.getItem(name);
@@ -108,4 +108,4 @@ const globalState = (name, val, shouldStore) => {
 };
 
 
-export { createSignal, globalState }
+export { createSignal, Store }

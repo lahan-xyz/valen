@@ -1,6 +1,6 @@
-import { Nugget } from 'valen';
+import { Widget } from 'valen';
 
-const Text = new Nugget ('Text', {
+const Text = new Widget ('Text', {
   template: (data) => {
     data.color = data.color || "dodgerblue"
     data.align = data.align || "center"
@@ -18,7 +18,6 @@ const Text = new Nugget ('Text', {
       display: block;
     `
   }
-}
-)
+})
 
 export default Text;

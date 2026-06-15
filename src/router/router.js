@@ -40,7 +40,7 @@ const loadComponent = (path) => {
 }
 
 
-const Link = new Nugget('Link', {
+const Link = new Widget('Link', {
   template: (data) => {
     const classN = data.class ? 'class=[ class ]' : '';
     return `

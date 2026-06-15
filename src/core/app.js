@@ -100,7 +100,7 @@ class App {
     
     //template = handleRouter(template);
     template = initiateComponents(template, false, false);
-    
+ 
     const htmlString = processComponentMarkup(template, this);
     const fragment = document.createRange().createContextualFragment(htmlString);
     

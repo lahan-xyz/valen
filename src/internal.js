@@ -22,7 +22,7 @@ export function queueUpdate(effect) {
 }
 
 export const components = new Map();
-export const nuggets = new Map();
+export const widgets = new Map();
 export const reactiveCache = new Map();
 
 export const stylesheet = {
@@ -91,7 +91,7 @@ export function stringBetween(str, f, s, lastIndex) {
 // For primitives and variables that get completely overwritten/reassigned
 export const ctx = {
   counterVA: 0,
-  nuggetCounter: 0,
+  widgetCounter: 0,
   routerObj: {},
   currentComponent: null,
   navigateFunc: () => {},

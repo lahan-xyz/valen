@@ -1,4 +1,4 @@
-import { Component, globalState } from 'valen'
+import { Component, Store } from 'valen'
 import QuestionCard from '../atoms/QuestionCard.js'
 
 // Subject list
@@ -6,7 +6,7 @@ const SUBJECTS = ['Mathematics', 'English', 'Chemistry', 'Physics']
 
 const YEARS = Array.from({ length: 2025 - 1978 + 1 }, (_, i) => 1978 + i)
 
-globalState('$pq', {
+Store('$pq', {
   subject: SUBJECTS[0],
   year: YEARS[0]
 }, true)
@@ -115,18 +115,12 @@ const AppView = new Component("AppView", {
       <header class="app-header">
         <h1 class="app-title">JAMB Past Questions</h1>
         <div class="app-controls">
-          <select aria-label="Select Subject" class="app-select" q:value=[ currentSubject ] @change=[ 
-            const { value } = e.target;
-            this.changeSubject(value);
-           ]>
+          <select aria-label="Select Subject" class="app-select" q:value=[ currentSubject ] @change=[ const { value } = e.target; this.changeSubject(value); ]>
             ${SUBJECTS.map(sub => `<option value="${sub}" ${ sub === data.currentSubject ? 'selected' : '' }>${sub}</option>`).join('')}
           </select>
           <select aria-label="Select Year" class="app-select"
             q:value=[ currentYear ]
-            @change=[
-            const { value } = e.target;
-            this.changeYear(value);
-          ]>
+            @change=[ const { value } = e.target; this.changeYear(value); ]>
             ${YEARS.map(year => `<option value="${year}"  ${ year === data.currentYear ? 'selected' : '' }>${year}</option>`).join('')}
           </select>
           <div class="page-nav">

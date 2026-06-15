@@ -1,5 +1,5 @@
 import { Atom } from 'valen'
-import Text from '../nuggets/Text.js'
+import Text from '../widgets/Text.js'
 
 const QuestionCard = new Atom("QuestionCard", {
   template: () => {

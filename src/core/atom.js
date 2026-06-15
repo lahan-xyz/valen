@@ -88,9 +88,9 @@ class Atom {
       const template = this.#template;
       const name = this.#name;
       
-      const processNuggets = (html) => {
-        html = initiateNuggets(html);
-        return initiateExtendedNuggets(html);
+      const processWidgets = (html) => {
+        html = initiateWidgets(html);
+        return initiateExtendedWidgets(html);
       };
       
       // ── Configuration ──
@@ -113,7 +113,7 @@ class Atom {
             itemHTML = initiateComponents(itemHTML, false, true);
             itemHTML = processComponentMarkup(itemHTML, this, name);
           } else {
-            itemHTML = processNuggets(itemHTML);
+            itemHTML = processWidgets(itemHTML);
             itemHTML = lintPlaceholders(itemHTML, true);
             itemHTML = processComponentMarkup(itemHTML, this, name);
           }

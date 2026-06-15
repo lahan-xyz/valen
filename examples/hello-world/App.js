@@ -1,26 +1,18 @@
 import { App } from 'valen'
 
 const HelloWorld = new App('#app', {
-  data: {
-    text: ""
-  },
   template: () => `
-    <h1 color="#F7017A">Hello, World!<h1/>
-    <div>[ text ]</div>
-    <input
-      type="text"
-      @input=[ data.text = e.target.value; ]
-    />
+    <h1>Hello, World!</h1>
+    <h1>Hello, World!</h1>
     `,
   stylesheet: {
     "html": `
       margin: 0;
       padding: 0;
       box-sizing: border-box;
+      color: #F7017A;
+      text-align: center;
     `
-  },
-  run() {
-    
   }
 });
 
