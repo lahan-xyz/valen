@@ -3,8 +3,8 @@ import { updateComponent } from '../dom/utils.js';
 
 
 // Creates a reactive signal, a proxy object that automatically updates the DOM.
-function createSignal(data, object) {
-  const item = typeof data !== "object" ? { value: data } : data;
+function createSignal(state, object) {
+  const item = !state || typeof state !== "object" ? { value: state } : state;
   
   // Cache for nested reactive wrappers – one proxy per underlying object
   const cache = new WeakMap();
@@ -25,14 +25,14 @@ function createSignal(data, object) {
         return createReactiveObject(target[key]);
       },
       set(target, key, value) {
+       // console.log(object)
         const prev = target[key];
         if (prev !== value) {
           target[key] = value;
-          
-          if (!object.isFrozen) {
+          if (!object?.isFrozen) {
             const goAhead = object.onUpdate ?
               object.onUpdate({ oldVal: prev, key, newVal: value },
-                object.data
+                object.state
               ) :
               true;
             if (goAhead) updateComponent(key, object);

@@ -166,13 +166,12 @@ function evaluateTemplate(templateString, instance) {
     const isGlobal = ext.charCodeAt(0) === 36; // '$'
     
     let evaluator = evaluatorCache.get(ext);
-    
     if (!evaluator) {
       try {
-        const source = isGlobal ? ` return ${ ext };` : `with(data) { return ${ ext }; }`;
+        const source = isGlobal ? ` return ${ ext };` : `with(state) { return ${ ext }; }`;
         
-        // Pass 'data' as the argument name
-        evaluator = new Function("data", source);
+        // Pass 'state' as the argument name
+        evaluator = new Function("state", source);
         evaluatorCache.set(ext, evaluator);
       } catch (err) {
         console.warn(`
@@ -182,8 +181,8 @@ function evaluateTemplate(templateString, instance) {
   }
   
   try {
-    // Pass instance.data directly into the function execution
-    const parsed = isGlobal ? evaluator() : evaluator.call(instance, instance.data);
+    // Pass instance.state directly into the function execution
+    const parsed = isGlobal ? evaluator() : evaluator.call(instance, instance.state);
     
     if (parsed != null && !Number.isNaN(parsed)) {
       combinedHTML += parsed;
@@ -225,7 +224,7 @@ function initiateWidgets(markup, isWidget) {
       if (instance) {
         evaluated = instance(d);
       } else {
-        console.warn(`Valen:\nWidget '${name}' is not defined`);
+        console.warn(`Valen:\nWidget '${name}' could not be rendered. Make sure '${name}' is defined or wrapped in the Widget function.`);
         evaluated = match; // leave original markup as fallback
       }
     } catch (e) {
@@ -268,11 +267,12 @@ function initiateComponents(markup, isWidget, fromAtom) {
   return lintPlaceholders(markup, isWidget);
 }
 
+const classRe = /\bclass\s*=\s*(["'])(.*?)\1/i;
+const entRe = /<([a-zA-Z][a-zA-Z0-9\-]*)((?:\s+[^>]*?)?)(\/?>)/g;
 
 function g(str, className) {
-  return str.replace(/<([a-zA-Z][a-zA-Z0-9\-]*)((?:\s+[^>]*?)?)(\/?>)/g, (match, tagName, attrs, ending) => {
+  return str.replace(entRe, (match, tagName, attrs, ending) => {
     // Already has class attribute?
-    const classRe = /\bclass\s*=\s*(["'])(.*?)\1/i;
     const existing = attrs.match(classRe);
     if (existing) {
       // Append to existing class
@@ -530,7 +530,7 @@ function addIndexToTemplate(str, index, instance) {
       continue;
     }
     
-    combined += `[this.data[${index}].${val.trim()}]`;
+    combined += `[this.state[${index}].${val.trim()}]`;
   }
   
   const linted = lintPlaceholders(combined);

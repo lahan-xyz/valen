@@ -16,112 +16,112 @@ async function loadSubject(subject, year) {
   return module.default[`year_${year}`] || [];
 }
 
-const AppView = new Component("AppView", {
-  data: {
-    currentSubject: $pq.subject,
-    currentYear: $pq.year,
-    currentPage: 1,
-    totalPages: 6
-  },
-  
-  created(data) {
-    this.isRendered = false;
+function AppView() {
+  return {
+    state: {
+      currentSubject: $pq.subject,
+      currentYear: $pq.year,
+      currentPage: 1,
+      totalPages: 6
+    },
     
-    this.computePageIdxRange = () => {
-      const first = (data.currentPage * 10) - 10
-      const second = (data.currentPage * 10)
-      return [first, second]
-    }
-    
-    // Optimized
-    this.transformQuestObj = (questionsArray, idxStart) => {
-      const len = questionsArray.length;
-      const result = new Array(len); // Pre-allocate memory
-      
-      for (let i = 0; i < len; i++) {
-        // Prefix increment bumps the number before assignment
-        result[i] = { ...questionsArray[i], quest_no: ++idxStart, year: data.currentYear };
+    created(state) {
+      this.isRendered = false;
+      this.computePageIdxRange = () => {
+        const first = (state.currentPage * 10) - 10
+        const second = (state.currentPage * 10)
+        return [first, second]
       }
       
-      return result;
-    }
-    
-    this.loadAndRender = async () => {
-      const questions = await loadSubject(data.currentSubject, data.currentYear)
-      const [first, second] = this.computePageIdxRange()
-      const sliced = questions.slice(first, second)
-      const transformed = this.transformQuestObj(sliced, first)
-      // update total pages dynamically
-      data.totalPages = Math.ceil(questions.length / 10) || 1
-      
-      if (this.isRendered) {
-        QuestionCard.set(transformed)
-      } else {
-        QuestionCard.renderWith(transformed);
-        this.isRendered = true;
+      // Optimized
+      this.transformQuestObj = (questionsArray, idxStart) => {
+        const len = questionsArray.length;
+        const result = new Array(len); // Pre-allocate memory
+        
+        for (let i = 0; i < len; i++) {
+          // Prefix increment bumps the number before assignment
+          result[i] = { ...questionsArray[i], quest_no: ++idxStart, year: state.currentYear };
+        }
+        
+        return result;
       }
-    }
-    
-    // Page navigation
-    this.previousPage = () => {
-      if (data.currentPage > 1) {
-        data.currentPage -= 1
-      }
-    }
-    
-    this.nextPage = () => {
-      if (data.currentPage < data.totalPages) {
-        data.currentPage += 1
-      }
-    }
-    
-    this.changeSubject = (value) => {
-      data.currentSubject = value;
-      data.currentPage = 1; // Reset to page 1
-    }
-    
-    this.changeYear = (value) => {
-      data.currentYear = parseInt(value);
-      data.currentPage = 1; // Reset to page 1
-    }
-  },
-  
-  onUpdate({ key, newVal: value }) {
-    switch (key) {
-      case 'currentSubject':
-        $pq.subject = value;
-        break;
       
-      case 'currentYear':
-        $pq.year = value;
-        break;
+      this.loadAndRender = async () => {
+        const questions = await loadSubject(state.currentSubject, state.currentYear)
+        const [first, second] = this.computePageIdxRange()
+        const sliced = questions.slice(first, second)
+        const transformed = this.transformQuestObj(sliced, first)
+        // update total pages dynamically
+        state.totalPages = Math.ceil(questions.length / 10) || 1
+        
+        if (this.isRendered) {
+         QuestionCard.set(transformed)
+        } else {
+          QuestionCard.renderWith(transformed);
+          this.isRendered = true;
+        }
+      }
       
-      default:
-        this.loadAndRender();
-        return true;
-    }
+      // Page navigation
+      this.previousPage = () => {
+        if (state.currentPage > 1) {
+          state.currentPage -= 1
+        }
+      }
+      
+      this.nextPage = () => {
+        if (state.currentPage < state.totalPages) {
+          state.currentPage += 1
+        }
+      }
+      
+      this.changeSubject = (value) => {
+        state.currentSubject = value;
+        state.currentPage = 1; // Reset to page 1
+      }
+      
+      this.changeYear = (value) => {
+        state.currentYear = parseInt(value);
+        state.currentPage = 1; // Reset to page 1
+      }
+    },
     
-    this.loadAndRender();
-    return true;
-  },
-  
-  async run(data) {
-    // Initial load
-    await this.loadAndRender()
-  },
-  
-  template: (data) => `
+    onUpdate({ key, newVal: value }) {
+      switch (key) {
+        case 'currentSubject':
+          $pq.subject = value;
+          break;
+          
+        case 'currentYear':
+          $pq.year = value;
+          break;
+          
+        default:
+          this.loadAndRender();
+          return true;
+      }
+      
+      this.loadAndRender();
+      return true;
+    },
+    
+    async run() {
+      // Initial load
+      await this.loadAndRender()
+    },
+    
+    template: (state) => `
     <div class="app-container">
       <header class="app-header">
         <h1 class="app-title">JAMB Past Questions</h1>
         <div class="app-controls">
-          <select aria-label="Select Subject" class="app-select" q:value=[ currentSubject ] @change=[ const { value } = e.target; this.changeSubject(value); ]>
-            ${SUBJECTS.map(sub => `<option value="${sub}" ${ sub === data.currentSubject ? 'selected' : '' }>${sub}</option>`).join('')}
+          <select aria-label="Select Subject" class="app-select" v:value=[ currentSubject ] @change=[ this.changeSubject(value); ]>
+            ${SUBJECTS.map(sub => `<option value="${sub}" ${ sub === state.currentSubject ? 'selected="true"' : '' }>${sub}</option>`).join('')}
           </select>
           <select aria-label="Select Year" class="app-select"
-            q:value=[ currentYear ]
-            @change=[ const { value } = e.target; this.changeYear(value); ]>
-            ${YEARS.map(year => `<option value="${year}"  ${ year === data.currentYear ? 'selected' : '' }>${year}</option>`).join('')}
+            v:value=[ currentYear ]
+            @change=[ this.changeYear(value); ]>
+            ${YEARS.map(year => `<option value="${year}"  ${ year === state.currentYear ? 'selected="true"' : '' }>${year}</option>`).join('')}
           </select>
           <div class="page-nav">
             <button class="page-btn" @click=[ this.previousPage() ]>← Prev</button>
@@ -133,18 +133,18 @@ const AppView = new Component("AppView", {
       <main id="questions-container"></main>
     </div>
   `,
-  
-  stylesheet: {
-    ".app-container": `
+    
+    stylesheet: {
+      ".app-container": `
       max-width: 800px;
       margin: 0 auto;
       padding: 2rem 1.2rem;
     `,
-    ".app-header": `
+      ".app-header": `
       text-align: center;
       margin-bottom: 2rem;
     `,
-    ".app-title": `
+      ".app-title": `
       font-size: 2.2rem;
       font-weight: 700;
       margin: 0 0 1.5rem 0;
@@ -153,14 +153,14 @@ const AppView = new Component("AppView", {
       -webkit-text-fill-color: transparent;
       letter-spacing: -0.5px;
     `,
-    ".app-controls": `
+      ".app-controls": `
       display: flex;
       flex-wrap: wrap;
       justify-content: center;
       gap: 0.8rem;
       align-items: center;
     `,
-    ".app-select": `
+      ".app-select": `
       background: #1a1a24;
       border: 1px solid #2e2e3e;
       border-radius: 30px;
@@ -186,16 +186,16 @@ const AppView = new Component("AppView", {
       /* ensure width is determined by content + padding, not by default sizing */
       min-width: 18rem;
     `,
-    ".app-select:hover, .app-select:focus": `
+      ".app-select:hover, .app-select:focus": `
       border-color: #4ade80;
       box-shadow: 0 0 0 2px rgba(74,222,128,0.3);
     `,
-    ".page-nav": `
+      ".page-nav": `
       display: flex;
       align-items: center;
       gap: 0.6rem;
     `,
-    ".page-btn": `
+      ".page-btn": `
       all: unset;
       background: #1a1a24;
       border: 1px solid #2e2e3e;
@@ -207,26 +207,26 @@ const AppView = new Component("AppView", {
       cursor: pointer;
       transition: background 0.2s, color 0.2s, transform 0.1s;
     `,
-    ".page-btn:hover": `
+      ".page-btn:hover": `
       background: #252535;
       color: #fff;
       transform: translateY(-1px);
     `,
-    ".page-btn:active": `
+      ".page-btn:active": `
       transform: scale(0.96);
     `,
-    ".page-indicator": `
+      ".page-indicator": `
       font-size: 0.9rem;
       font-weight: 500;
       color: #888;
       min-width: 3rem;
       text-align: center;
     `,
-    "#questions-container": `
+      "#questions-container": `
       margin-top: 1rem;
     `,
-    // Responsive
-    "@media (max-width: 600px)": `
+      // Responsive
+      "@media (max-width: 600px)": `
       .app-title {
         font-size: 1.8rem;
       }
@@ -238,7 +238,8 @@ const AppView = new Component("AppView", {
         justify-content: center;
       }
     `,
-  },
-})
+    },
+  }
+}
 
-export default AppView
+export default Component(AppView);

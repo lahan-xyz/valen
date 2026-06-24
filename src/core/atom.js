@@ -1,179 +1,164 @@
-import { initiateStyleSheet, processComponentMarkup, stringToDocumentFragment, addToReactiveCache } from '../dom/utils.js';
-import { components } from '../internal.js'
+import {
+  initiateStyleSheet,
+  processComponentMarkup,
+  addToReactiveCache,
+  setupEventDelegation
+} from '../dom/utils.js';
+import { components } from '../internal.js';
 import { createSignal } from '../reactivity/signal.js';
-import { addIndexToTemplate, initiateComponents } from '../parser/utils.js';  
+import {
+  addIndexToTemplate,
+  initiateComponents,
+  initiateWidgets,
+  initiateExtendedWidgets,
+  lintPlaceholders
+} from '../parser/utils.js';
 
-
-class Atom {
-  // 1. Declare strict private fields
-  #element;
-  #name;
-  #template;
-  #data = [];
-  #useStrict = true;
-  #isReactive;
-  
-  constructor(name, options, id) {
-    this.#element = id;
-    this.#name = name;
-    this.#template = options.template;
-    this.#isReactive = options.isReactive;
-    
-    this.stylesheet = options.stylesheet;
-    this.dependencyMap = new Map();
-    initiateStyleSheet(`#${id}`, this);
-    components.set(name, this)
+function _set(index, value, shallow) {
+  if (!this.isReactive) {
+    throw new Error(`Valen:\nCannot call 'set()' on Atom ${this.name}.\n\n${this.name} is not a reactive Atom`);
   }
   
-  // 2. Expose read-only public getters
-  get element() { return this.#element; }
-  get name() { return this.#name; }
-  get template() { return this.#template; }
-  get data() { return this.#data; }
-  get useStrict() { return this.#useStrict; }
-  get isReactive() { return this.#isReactive; }
-  
-  // Resolve string ID to DOM element once and cache it internally
-  _getElement() {
-    if (typeof this.#element === "string") {
-      const resolvedNode = document.getElementById(this.#element);
-      if (!resolvedNode) {
-        throw new Error(`Valen:\nMount node of '${this.#name}' is invalid or not provided`);
+  if (typeof index === "number") {
+    if (value && typeof value === "object") {
+      if (shallow) {
+        const keys = Object.keys(value);
+        for (let i = 0; i < keys.length; i++) {
+          this.state[index][keys[i]] = value[keys[i]];
+        }
+      } else {
+        this.state[index] = value;
       }
-      this.#element = resolvedNode; // Cache the node
     }
-    return this.#element;
-  }
-  
-  // Cleanly clear the container and purge events
-  destroy() {
-    const el = this._getElement();
-    if (!el) return;
-    
-    const allNodes = [];
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT);
-    let node = walker.currentNode; // Start at root container
-    
-    while (node) {
-      allNodes.push(node);
-      node = walker.nextNode();
+  } else if (Array.isArray(index)) {
+    for (var i = 0, len = index.length; i < len; i++) {
+      this.state[i] = index[i];
     }
-    
-    removeEvents(allNodes);
-    
-    el.replaceChildren();
-    
-    this.#data = [];
-  }
-  
-  renderWith(data, position = "append") {
-    if (!data || typeof data !== "object") {
-      throw new Error(
-        `Valen:\nFirst argument passed to '${this.#name}.renderWith()' must either be an object or an array.`
-      );
-    }
-    
-    const el = this._getElement();
-    const dataArray = Array.isArray(data) ? data : [data];
-    if (dataArray.length === 0) return;
-    
-    const dataLen = this.#data.length;
-    
-    this.#data = createSignal(dataArray.slice(), this);
-    
-    // Return a Promise that resolves when rendering finishes
-    return new Promise((resolve, reject) => {
-      const isTemplateFunc = typeof this.#template === "function";
-      const isReactive = this.#isReactive;
-      const template = this.#template;
-      const name = this.#name;
-      
-      const processWidgets = (html) => {
-        html = initiateWidgets(html);
-        return initiateExtendedWidgets(html);
-      };
-      
-      // ── Configuration ──
-      const BATCH_SIZE = 30; // items per animation frame – tune this!
-      const htmlParts = [];
-      let currentIndex = dataLen;
-      
-      const processBatch = () => {
-        const end = Math.min(currentIndex + BATCH_SIZE, dataArray.length);
-        
-        for (let i = currentIndex; i < end; i++) {
-          const item = dataArray[i];
-          let itemHTML = isTemplateFunc ? template(item, i) : template;
-          
-          itemHTML = isReactive ?
-            addIndexToTemplate(itemHTML, i) :
-            addIndexToTemplate(itemHTML, i, this);
-          
-          if (isReactive) {
-            itemHTML = initiateComponents(itemHTML, false, true);
-            itemHTML = processComponentMarkup(itemHTML, this, name);
-          } else {
-            itemHTML = processWidgets(itemHTML);
-            itemHTML = lintPlaceholders(itemHTML, true);
-            itemHTML = processComponentMarkup(itemHTML, this, name);
-          }
-          
-          htmlParts.push(itemHTML);
-        }
-        
-        currentIndex = end;
-        
-        if (currentIndex < dataArray.length) {
-          // Still have items – yield the main thread
-          requestAnimationFrame(processBatch);
-        } else {
-          // All items processed – build final DOM once and mount
-          try {
-            const combinedHTML = htmlParts.join('');
-            const fragment = stringToDocumentFragment(combinedHTML);
-            if (position === "append") {
-              el.appendChild(fragment);
-            } else {
-              el.prepend(fragment);
-            }
-            
-            addToReactiveCache(el);
-            resolve(); // Done
-          } catch (err) {
-            reject(err);
-          }
-        }
-      };
-      // Kick off the first batch
-      requestAnimationFrame(processBatch);
-    });
-  }
-  
-  set(index, value, shallow) {
-    if (!this.#isReactive) {
-      throw new Error(`Valen:\nCannot call 'set()' on Atom ${this.#name}.\n\n${this.#name} is not a reactive Atom`);
-    }
-    
-    if (typeof index === "number") {
-      
-      if (value && typeof value === "object") {
-        if (shallow) {
-          Object.keys(value).forEach(key => {
-            this.#data[index][key] = value[key];
-          });
-        } else {
-          this.#data[index] = value;
-        }
-      }
-    } else if (Array.isArray(index)) {
-      index.forEach((newObj, i) => {
-        this.#data[i] = newObj;
-      });
-    } else {
-      console.warn(`Valen:\nFirst Argument passed to '${this.#name}.set()' must either be a number or an array.`);
-    }
+  } else {
+    console.warn(`Valen:\nFirst Argument passed to '${this.name}.set()' must either be a number or an array.`);
   }
 }
 
-
-export default Atom;
+export default function Atom(activatorFunc) {
+  const options = activatorFunc();
+  const { id, template, isReactive, stylesheet } = options;
+  
+  const name = activatorFunc.name;
+  
+  let _element = id,
+  _state = [];
+  const _name = name;
+  const _template = template;
+  const _useStrict = true;
+  
+  const setFunc = isReactive ? _set : () => {
+    console.warn(`Cannot call set on Atom '${_name}'. Make sure 'isReactive' is set to true.`);
+  };
+  
+  const instance = {
+   dependencyMap: isReactive ? new Map() : undefined,
+    stylesheet,
+    _getElement() {
+      if (typeof _element === "string") {
+        const resolvedNode = document.getElementById(_element);
+        if (!resolvedNode) {
+          throw new Error(`Valen:\nMount node of '${_name}' is invalid or not provided`);
+        }
+        _element = resolvedNode;
+      }
+      return _element;
+    },
+    
+    destroy() {
+      const el = this._getElement();
+      if (isReactive) this.dependencyMap.clear();
+      
+      if (!el) return;
+      
+      el.replaceChildren();
+      this.state = [];
+    },
+    
+    renderWith(data, position = "append") {
+      if (!data || (typeof data !== "object")) {
+        throw new Error(`Valen:\nFirst argument of '${_name}.renderWith()' must be an object or array.`);
+      }
+      
+      const el = this._getElement();
+      const dataArray = Array.isArray(data) ? data : [data];
+      
+      if (dataArray.length === 0) return Promise.resolve();
+      
+      const maxBound = _state.length + dataArray.length;
+      
+      let currentIndex = _state.length;
+      _state = isReactive ? createSignal([..._state, ...dataArray], this) : dataArray;
+      
+      return new Promise((resolve, reject) => {
+        const isTemplateFunc = typeof _template === "function";
+        const masterFragment = document.createDocumentFragment();
+        const BATCH_SIZE = 30;
+        
+        const processBatch = () => {
+          const end = Math.min(currentIndex + BATCH_SIZE, maxBound);
+          
+          for (let i = currentIndex; i < end; i++) {
+            const relativeIndex = i - _state.length;
+            const itemData = dataArray[relativeIndex];
+            
+            const itemHTML = isTemplateFunc ?
+              _template(itemData, i) :
+              _template;
+            
+            const indexedHTML = addIndexToTemplate(itemHTML, i);
+            
+            const processedHTML = isReactive ?
+              initiateComponents(indexedHTML, false, true) :
+              lintPlaceholders(initiateExtendedWidgets(initiateWidgets(indexedHTML)), true);
+            
+            const frag = processComponentMarkup(processedHTML, instance, _name);
+            if (frag) masterFragment.appendChild(frag);
+          }
+          
+          currentIndex = end;
+          
+          if (currentIndex < maxBound) {
+            requestAnimationFrame(processBatch);
+          } else {
+            try {
+              if (position === "append") {
+                el.appendChild(masterFragment);
+              } else {
+                el.prepend(masterFragment);
+              }
+              addToReactiveCache(el);
+              setupEventDelegation(el, instance);
+              resolve();
+            } catch (err) {
+              console.error("Valen render error:", err);
+              reject(err);
+            }
+          }
+        };
+        
+        requestAnimationFrame(processBatch);
+      });
+    },
+    set: setFunc
+  };
+  
+  Object.defineProperties(instance, {
+    element: { get: () => _element, configurable: true },
+    name: { get: () => _name, configurable: true },
+    state: { get: () => _state,
+      configurable: true },
+    template: { get: () => _template, configurable: true },
+    useStrict: { get: () => _useStrict, configurable: true },
+    isReactive: { get: () => isReactive, configurable: true },
+    type: { get: () => "Atom", configurable: true }
+  });
+  
+  initiateStyleSheet(`#${id}`, instance);
+  components.set(name, instance);
+  return instance;
+}

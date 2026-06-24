@@ -70,7 +70,7 @@ export class LRUCache {
 
 export const components = new Map();
 export const widgets = new Map();
-export const reactiveCache = new LRUCache();
+export const reactiveCache = new Map();
 
 export const stylesheet = {
   el: typeof document !== 'undefined' ? document.createElement("style") : null,

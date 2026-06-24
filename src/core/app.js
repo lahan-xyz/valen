@@ -28,7 +28,7 @@ class App {
     this.#template = options.template || "";
     
     // Reactive state
-    this.data = createSignal(options.data, this);
+    this.state = createSignal(options.state, this);
     
     this.stylesheet = options.stylesheet;
     
@@ -45,21 +45,21 @@ class App {
     
     initiateStyleSheet("", this);
     
-    let _data = this.data;
+    let _state = this.state;
     Object.defineProperties(this, {
-      data: {
-        get: () => _data,
-        set: (data) => {
+      state: {
+        get: () => _state,
+        set: (state) => {
           if (!this.#isFrozen) {
             // Hardened object validation
-            if (!data || typeof data !== "object" || Array.isArray(data)) {
-              console.warn(`Value of 'App.data' must be a plain object`);
+            if (!state || typeof state !== "object" || Array.isArray(state)) {
+              console.warn(`Value of 'App.state' must be a plain object`);
               return;
             }
             
-            const keys = Object.keys(data);
+            const keys = Object.keys(state);
             for (let key of keys) {
-              this.data[key] = data[key];
+              this.state[key] = state[key];
             }
           }
           return true;
@@ -69,7 +69,7 @@ class App {
     });
     
     if (this.#created) {
-      this.#created(this.data);
+      this.#created(this.state);
       this.#created = null; // Can still mutate internally
     }
   }
@@ -95,19 +95,19 @@ class App {
   
   _doRender() {
     let template = this.template instanceof Function ?
-      this.template(this.data) :
+      this.template(this.state) :
       this.template;
     
     //template = handleRouter(template);
     template = initiateComponents(template, false, false);
  
-    const htmlString = processComponentMarkup(template, this);
-    const fragment = document.createRange().createContextualFragment(htmlString);
+    const fragment = processComponentMarkup(template, this);
+    //const fragment = document.createRange().createContextualFragment(htmlString);
     
     // 3. Replaces while-loop removal and appendChild in a single native API call
     this.#element.replaceChildren(fragment);
     
-    ctx.currentComponent?.navigateFunc(ctx.currentComponent.data);
+    ctx.currentComponent?.navigateFunc(ctx.currentComponent.state);
     
     if (!this.#addedToReactiveCache) {
       addToReactiveCache(this.#element);
@@ -118,15 +118,16 @@ class App {
     
     for (const component of components) {
       const instance = component[1];
-      if (instance.constructor.name === "Atom") continue;
+      if (instance.type === "Atom") continue;
       
       if (instance.element) {
         strToEl(instance);
       }
-      instance.run(instance.data);
+      
+      if(instance.run) instance.run(instance.state);
     }
     
-    this.#run(this.data);
+    this.#run(this.state);
   }
   
   render() {

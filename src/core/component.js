@@ -1,168 +1,84 @@
-import { ctx, components } from '../internal.js';
+import { components } from '../internal.js';
 import { createSignal } from '../reactivity/signal.js';
+import { initiateStyleSheet } from '../dom/utils.js';
 
 
-class Component {
-  // 1. Declare strict private fields
-  #name;
-  #isFrozen = false;
-  #useStrict;
-  #onUpdate;
-  #run;
-  #created;
-  #template;
+export default function Component(componentFunc) {
+  const componentName = componentFunc.name;
   
-  constructor(name, options = {}) {
-    if (name) {
-      globalThis[name] = this;
-    }
-    
-    // Assign to private fields
-    this.#name = name;
-    this.#template = options?.template;
-    this.#run = options.run || (() => {});
-    this.isMounted = false;
-    this.navigateFunc = options.onNavigate || (() => {});
-    
-    if (!this.#template) {
-      throw new Error(`Valen:\nTemplate not provided for Component ${name}`);
-    }
-    
-    this.element = `vaEl${ctx.counterVA}`; // string ID – later resolved to DOM node
-    ctx.counterVA++;
-    
-    // Reactive state
-    this.data = createSignal(options.data, this);
-    
-    this.#created = options.created;
-    this.stylesheet = options.stylesheet;
-    this.#onUpdate = options.onUpdate;
-    
-    // O(1) existence check instead of O(N) array allocation
-    this.#useStrict = 'useStrict' in options ? options.useStrict : true;
-    
-    // Batched rendering queue (microtask‑based)
-    this._renderPending = false;
-    
-    let _data = this.data;
-    
-    // 2. Only define the custom setter/getter for `data` here
-    Object.defineProperty(this, "data", {
-      get: () => _data,
-      set: (data) => {
-        if (!this.#isFrozen) {
-          // Hardened object validation
-          if (!data || typeof data !== "object" || Array.isArray(data)) {
-            console.warn(`Value of '${this.#name}.data' must be a plain object`);
-            return;
-          }
-          
-          const keys = Object.keys(data);
-          
-          for (let key of keys) {
-            this.data[key] = data[key];
-          }
-        }
-        return true;
-      },
-      configurable: true
-    });
-    
-    if (this.#created) {
-      this.#created(this.data);
-      this.#created = null; // Safe internal mutation
-    }
-    
-    components.set(name, this);
+  // 1. FAST FAIL: Validate the name BEFORE executing the function or checking the map
+  if (!componentName || componentName === "anonymous") {
+    throw new Error(`[Valen] Components must be named functions. Example: function Header() {}.`);
   }
   
-  // 3. Expose read-only public getters
-  get name() { return this.#name; }
-  get isFrozen() { return this.#isFrozen; }
-  get useStrict() { return this.#useStrict; }
-  get onUpdate() { return this.#onUpdate; }
-  get run() { return this.#run; }
-  get created() { return this.#created; }
-  get template() { return this.#template; }
-  
-  _scheduleRender() {
-    if (!this._renderPending) {
-      this._renderPending = true;
-      queueMicrotask(() => {
-        this._renderPending = false;
-        
-        const el = this._resolveElement();
-        if (el && el.isConnected) {
-          renderComponent(this, this.#name);
-        }
-      });
-    }
+  if (components.has(componentName)) {
+    throw new Error(`Component '${componentName}' already exists, choose a new component name.`);
   }
   
-  renderNow() {
-    this._renderPending = false;
-    renderComponent(this, this.#name);
+  // 2. Safely invoke the component function now that validation has passed
+  const instance = componentFunc();
+  
+  // 3. SAFETY FIX: `typeof null` is "object". We must check if instance is strictly truthy.
+  if (!instance || typeof instance !== "object" || Array.isArray(instance)) {
+    throw new Error(`Return value of Component '${componentName}' must be a plain object`);
   }
   
-  freeze() {
-    this.#isFrozen = true;
-  }
+  // The Gatekeeper Flag
+  let cssInjected = false;
   
-  unfreeze() {
-    this.#isFrozen = false;
-  }
+  const _state = createSignal(instance.state, instance);
   
-  show() {
-    const el = this._resolveElement();
-    if (el && el.style.display !== 'block') {
-      el.style.display = 'block';
-    }
-  }
-  
-  hide() {
-    const el = this._resolveElement();
-    if (el && el.style.display !== 'none') {
-      el.style.display = 'none';
-    }
-  }
-  
-  mount() {
-    if (!this.isMounted) {
-      const rendered = renderComponent(this, this.#name, true);
-      const fragment = document.createRange().createContextualFragment(rendered);
-      const el = this._resolveElement();
+  Object.defineProperty(instance, "state", {
+    get: () => _state,
+    set: (newstate) => {
+      if (instance.isFrozen) return;
       
-      if (el) {
-        // 4. Native C++ engine replacement replaces loop allocation
-        el.replaceChildren(fragment);
+      // Hardened object validation
+      if (!newstate || typeof newstate !== "object" || Array.isArray(newstate)) {
+        console.warn(`Value of '${componentName}.state' must be a plain object`);
+        return;
       }
       
-      this.isMounted = true; // Internal mutation
-    }
+      // 4. MEMORY & SPEED: Bypass the getter completely and use Object.assign
+      Object.assign(_state, newstate);
+      return true;
+    },
+    configurable: true
+  });
+  
+  // 5. LIFECYCLE OPTIMIZATION: Avoid `.bind()` memory allocation
+  if (typeof instance.created === "function") {
+    // Call directly with 'instance' as the 'this' context.
+    // Also pass '_state' directly to avoid triggering the instance.state getter we just defined.
+    instance.created.call(instance, _state);
+    instance.created = undefined; // 'undefined' is preferred over 'null' for V8 hidden classes
   }
   
-  destroy() {
-    const el = this._resolveElement();
-    if (!el) return;
-    
-    const allNodes = [el];
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT);
-    let node;
-    while ((node = walker.nextNode())) {
-      allNodes.push(node);
+  // The Execution Function
+  const func = () => {
+    if (!instance.isMounted) {
+      instance.isFrozen = false;
+      instance.name = componentName;
+      
+      // 6. SPEED: Avoid the 'in' operator, use Nullish Coalescing
+      instance.useStrict = instance.useStrict ?? true;
+      instance.element = `valen${componentName}`;
+      
+      // The One-Time CSS Evaluation
+      if (instance.stylesheet && !cssInjected) {
+        initiateStyleSheet(`#${instance.element}`, instance);
+        cssInjected = true;
+      }
+      
+      // Clean up (undefined > null)
+      instance.stylesheet = undefined;
     }
     
-    removeEvents(allNodes);
-    el.remove();
-  }
+    return instance;
+  };
   
-  _resolveElement() {
-    if (typeof this.element === 'string') {
-      return document.querySelector(this.element) || null;
-    }
-    return this.element;
-  }
+  // Register globally for template interpolation
+  components.set(componentName, func);
+  
+  return instance;
 }
-
-
-export default Component;

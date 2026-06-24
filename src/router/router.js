@@ -18,7 +18,7 @@ const loadComponent = (path) => {
     }
     document.title = title;
     ctx.currentComponent = instance;
-    ctx.currentComponent.navigateFunc(ctx.currentComponent.data);
+    ctx.currentComponent.navigateFunc(ctx.currentComponent.state);
   }
   
   for (let i = 0; i < len; i++) {

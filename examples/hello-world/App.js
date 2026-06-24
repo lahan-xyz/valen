@@ -1,8 +1,12 @@
 import { App } from 'valen'
+import Text from '../past-questions/widgets/Text.js';
 
 const HelloWorld = new App('#app', {
   template: () => `
     <h1>Hello, World!</h1>
+    <Text ({ txt: "Hello, World!", size: 32 })>
+      <Text { txt: "Hello, World!", size: 32, color: "inherit" } />
+    </Text>
     `,
   stylesheet: {
     "html": `

@@ -4,11 +4,13 @@ function Text() {
   return {
     template() {
       return (`
-      <span
-        color=[ color || "dodgerblue" ]
-        text-align=[ align || "center" ]
-        font-size="[ size || 20 ]px"
-        >[ txt ]</span>
+        <span
+          color=[ color || "dodgerblue" ]
+          text-align=[ align || "center" ]
+          font-size="[ size || 20 ]px"
+        >
+          [ txt ]
+        </span>
     `)
     },
     stylesheet: {
