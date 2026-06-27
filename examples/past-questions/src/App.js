@@ -12,12 +12,21 @@ const JambApp = new App('#app', {
       box-sizing: border-box;
     `,
     "body": `
-      font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
       color: #e4e4e7;
       min-height: 100vh;
       -webkit-tap-highlight-color: transparent;
     `,
+    "body, *": "font-family: 'Inter'",
+
+    "@font-face": `
+      font-family: 'Inter';
+      font-style: normal;
+      font-weight: normal;
+      font-display: swap;
+      src: url('./src/assets/Inter-Bold.otf');
+   `
   },
 });
+
 
 JambApp.render();

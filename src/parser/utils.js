@@ -2,8 +2,14 @@ import { ctx, components, LRUCache, sharedTemplate, stringBetween, updateQueue, 
 import { renderComponent, initiateStyleSheet } from '../dom/utils.js';
 
 
+const lintedCache = new LRUCache();
 
 const lintPlaceholders = (html, isWidget) => {
+  const entry = lintedCache.get(html);
+  if (entry) {
+    return entry;
+  }
+  
   const eventRegex = /(@[\w]+)\s*=\s*\[((?:[^\[\]]|\[[^\[\]]*\])*)\]/g;
   const attributeRegex = /([\w-:]+)\s*=\s*\[((?:[^\[\]]|\[[^\[\]]*\])*)\]/g;
   
@@ -15,9 +21,13 @@ const lintPlaceholders = (html, isWidget) => {
   }
 
   // 2. Process Directives & Standard Attributes
-  return html.replace(attributeRegex, (_, attrName, innerContent) => {
+  const linted = html.replace(attributeRegex, (_, attrName, innerContent) => {
     return `${ attrName } = "[${innerContent}]"`;
   });
+  
+  lintedCache.set(html, linted);
+  
+  return linted;
 };
 
 const lexerCache = new LRUCache(500);

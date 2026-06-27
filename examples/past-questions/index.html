@@ -8,54 +8,27 @@
   
   <title>JAMB Past Questions & Answers</title>
   
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  
   <script type="importmap">
     {
     "imports": {
       "valen": "/src/valen.js"
       }
-    } 
+    }
   </script>
   
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap" media="print" onload="this.media='all'">
-  <style>
-    body,
-    #app {
-      background: #0a0a0f;
-    }
-  </style>
+  <link rel="modulepreload" href="/src/valen.js">
+  <link rel="modulepreload" href="./src/App.js">
+  
+  <style>body, #app{ background: #0a0a0f;}</style>
 </head>
 
 <body>
-  
+
   <div id="app">
     <style>
-      .app-loading {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        height: 100vh;
-        font-family: sans-serif;
-        background: #0a0a0f;
-      }
-      
-      .spinner {
-        width: 40px;
-        height: 40px;
-        border: 4px solid #ddd;
-        border-top-color: #22c55e;
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-      }
-      
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
+      .app-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #0a0a0f; }
+      .spinner { width: 40px; height: 40px; border: 4px solid #ddd; border-top-color: #22c55e; border-radius: 50%; animation: spin 1s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
     </style>
     <div class="app-loading">
       <div class="spinner"></div>
@@ -63,7 +36,7 @@
     </div>
   </div>
   
-  <script src="./App.js" type="module"></script>
+  <script src="./src/App.js" type="module"></script>
 </body>
 
 </html>
