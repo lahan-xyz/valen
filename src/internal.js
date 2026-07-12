@@ -89,6 +89,14 @@ export function stringBetween(str, f, s, lastIndex) {
   return str.slice(indx1 + f.length, indx2);
 }
 
+export function removeFromReactiveCache(nodeList) {
+  for (const child of nodeList) {
+    const id = child.valen_id;
+    if (id && reactiveCache.has(id)) {
+      reactiveCache.delete(id);
+    }
+  }
+}
 
 // --- 2. THE MUTABLE CONTEXT WRAPPER ---
 // For primitives and variables that get completely overwritten/reassigned

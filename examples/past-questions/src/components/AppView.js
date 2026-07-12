@@ -1,5 +1,6 @@
-import { Component, Store } from 'valen'
+import { Component, Store, detach, reAttach } from 'valen'
 import QuestionCard from '../atoms/QuestionCard.js'
+
 
 // Subject list
 const SUBJECTS = ['Mathematics', 'English', 'Chemistry', 'Physics']
@@ -26,7 +27,6 @@ function AppView() {
     },
     
     created(state) {
-      this.isRendered = false;
       this.computePageIdxRange = () => {
         const first = (state.currentPage * 10) - 10
         const second = (state.currentPage * 10)
@@ -54,11 +54,10 @@ function AppView() {
         // update total pages dynamically
         state.totalPages = Math.ceil(questions.length / 10) || 1
         
-        if (this.isRendered) {
-         QuestionCard.set(transformed)
+        if (QuestionCard.isMounted) {
+          QuestionCard.set(transformed)
         } else {
           QuestionCard.renderWith(transformed);
-          this.isRendered = true;
         }
       }
       
@@ -66,43 +65,30 @@ function AppView() {
       this.previousPage = () => {
         if (state.currentPage > 1) {
           state.currentPage -= 1
+          this.loadAndRender();
         }
       }
       
       this.nextPage = () => {
         if (state.currentPage < state.totalPages) {
           state.currentPage += 1
+          this.loadAndRender();
         }
       }
       
       this.changeSubject = (value) => {
         state.currentSubject = value;
         state.currentPage = 1; // Reset to page 1
+        $pq.subject = value;
+        this.loadAndRender();
       }
       
       this.changeYear = (value) => {
         state.currentYear = parseInt(value);
         state.currentPage = 1; // Reset to page 1
+        $pq.year = value;
+        this.loadAndRender();
       }
-    },
-    
-    onUpdate({ key, newVal: value }) {
-      switch (key) {
-        case 'currentSubject':
-          $pq.subject = value;
-          break;
-          
-        case 'currentYear':
-          $pq.year = value;
-          break;
-          
-        default:
-          this.loadAndRender();
-          return true;
-      }
-      
-      this.loadAndRender();
-      return true;
     },
     
     async run() {

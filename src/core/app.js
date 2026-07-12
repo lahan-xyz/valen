@@ -110,7 +110,7 @@ class App {
     ctx.currentComponent?.navigateFunc(ctx.currentComponent.state);
     
     if (!this.#addedToReactiveCache) {
-      addToReactiveCache(this.#element);
+      addToReactiveCache(this.#element);  
       this.#addedToReactiveCache = true;
     }
     

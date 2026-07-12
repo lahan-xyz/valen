@@ -15,7 +15,7 @@ function QuestionCard() {
       </div>
 
       <div class="qc-image-wrap" v:show=[ src ]>
-        <img class="qc-image" src="https://jamb-past-questions.vercel.app/src/scraper/images/[ src ]" loading="lazy" alt="[ year ] Question diagram" />
+        <img class="qc-image" src="https://raw.githubusercontent.com/lahan-xyz/jamb-past-questions/9b3ed3ff15677221b580fa398f2e466ccec5dce8/src/scraper/images/[ src ]" loading="lazy" alt="[ year ] Question diagram" />
       </div>
 
       <div class="qc-body">
@@ -48,6 +48,7 @@ function QuestionCard() {
     },
     
     stylesheet: {
+      "> div": `background: red;`,
       // ----- card shell (optimised) -----
       ".qc-card": `
       background: radial-gradient(circle at 20% 20%, #1b1b28, #0d0d14);

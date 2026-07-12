@@ -4,30 +4,72 @@ import { renderComponent, initiateStyleSheet } from '../dom/utils.js';
 
 const lintedCache = new LRUCache();
 
+// Matches both '@event=[' and 'attribute=['
+// The regex stops exactly after the '[' character.
+const startRegex = /(@[\w]+|[\w-:]+)\s*=\s*\[/g;
+
 const lintPlaceholders = (html, isWidget) => {
   const entry = lintedCache.get(html);
-  if (entry) {
-    return entry;
-  }
-  
-  const eventRegex = /(@[\w]+)\s*=\s*\[((?:[^\[\]]|\[[^\[\]]*\])*)\]/g;
-  const attributeRegex = /([\w-:]+)\s*=\s*\[((?:[^\[\]]|\[[^\[\]]*\])*)\]/g;
-  
-  // 1. Process Events
-  if (!isWidget) {
-    html = html.replace(eventRegex, (_, attrName, innerContent) => {
-        return `${attrName}="${innerContent.replaceAll("'", "`")}"`;
-    });
+  if (entry) return entry;
+
+  let result = '';
+  let lastIndex = 0;
+  let match;
+
+  // Reset regex state in case it was used previously
+  startRegex.lastIndex = 0;
+
+  while ((match = startRegex.exec(html)) !== null) {
+    const attrName = match[1];
+    const startIndex = startRegex.lastIndex; // Index right after the opening '['
+
+    // Fast character scan to find the matching closing ']'
+    let depth = 1;
+    let i = startIndex;
+    
+    while (i < html.length && depth > 0) {
+      // charCodeAt is slightly faster than string indexing in some engines
+      const charCode = html.charCodeAt(i);
+      if (charCode === 91) depth++;      // '['
+      else if (charCode === 93) depth--; // ']'
+      i++;
+    }
+
+    // If we found a perfectly balanced closing bracket
+    if (depth === 0) {
+      const endIndex = i - 1;
+      const innerContent = html.substring(startIndex, endIndex);
+
+      // Append all the HTML that came before this attribute
+      result += html.substring(lastIndex, match.index);
+
+      if (attrName.startsWith('@')) {
+        if (!isWidget) {
+          // Process Events
+          result += `${attrName}="${innerContent.replaceAll("'", "`")}"`;
+        } else {
+          // If it's a widget event, leave it exactly as it was
+          result += `${attrName}=[${innerContent}]`;
+        }
+      } else {
+        // Process Directives & Standard Attributes
+        result += `${attrName}="[${innerContent}]"`;
+      }
+
+      // Move our cursors forward to skip the content we just processed
+      lastIndex = i;
+      startRegex.lastIndex = i; 
+    } 
+    // If depth !== 0, the HTML is malformed (missing closing bracket).
+    // We safely ignore it, let the loop continue, and it will be caught 
+    // by the final substring append.
   }
 
-  // 2. Process Directives & Standard Attributes
-  const linted = html.replace(attributeRegex, (_, attrName, innerContent) => {
-    return `${ attrName } = "[${innerContent}]"`;
-  });
-  
-  lintedCache.set(html, linted);
-  
-  return linted;
+  // Append any remaining HTML after the last match
+  result += html.substring(lastIndex);
+
+  lintedCache.set(html, result);
+  return result;
 };
 
 const lexerCache = new LRUCache(500);

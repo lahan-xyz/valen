@@ -25,10 +25,16 @@ export default function Component(componentFunc) {
   
   // The Gatekeeper Flag
   let cssInjected = false;
+  let atomDeps = new Set();
   
   const _state = createSignal(instance.state, instance);
   
-  Object.defineProperty(instance, "state", {
+  Object.defineProperties(instance, {
+    type: {
+      get: () => "Component"
+    },
+    atomDeps: { get: () => atomDeps },
+    state: {
     get: () => _state,
     set: (newstate) => {
       if (instance.isFrozen) return;
@@ -43,7 +49,8 @@ export default function Component(componentFunc) {
       Object.assign(_state, newstate);
       return true;
     },
-    configurable: true
+    configurable: true,
+    }
   });
   
   // 5. LIFECYCLE OPTIMIZATION: Avoid `.bind()` memory allocation

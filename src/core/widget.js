@@ -22,7 +22,7 @@ export default function Widget(WidgetFunc) {
   let cssInjected = false;
   
   // The Execution Function
-  const func = (props = {}, children = "") => {
+  function func(props = {}, children = "") {
     // Generate the raw component object
     const instance = WidgetFunc(props);
     
@@ -45,6 +45,10 @@ export default function Widget(WidgetFunc) {
     // Pass only what is necessary to the renderer
     return renderWidget(instance, props, children);
   };
+  
+  Object.defineProperty(func, "type", {
+    get: () => "Widget"
+  })
   
   // Register globally for template interpolation
   widgets.set(widgetName, func);
