@@ -1,4 +1,4 @@
-import { Component, Store, detach, reAttach } from 'valen'
+import { Component, Store } from 'valen'
 import QuestionCard from '../atoms/QuestionCard.js'
 
 

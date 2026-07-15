@@ -2,7 +2,7 @@ import { reactiveCache, removeFromReactiveCache, components } from './internal.j
 import { renderComponent, addToReactiveCache } from './dom/utils.js'
 
 export function detach(instance, index) {
-  const { type, isMounted, element } = instance;
+  const { type, isMounted, element, onCleanup } = instance;
   
   // 1. Guard clause: Exit early if there's nothing to detach
   if (type === "Widget" || !isMounted) return;
@@ -30,6 +30,8 @@ export function detach(instance, index) {
       instance.clearElement();
     }
   }
+  
+  if(typeof onCleanup === 'function') onCleanup(instance.state);
   
   if (type === 'Component') {
     const deps = instance.atomDeps;

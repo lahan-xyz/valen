@@ -6,7 +6,7 @@ import {
   removeEventDelegation,
   nodeBindings
 } from '../dom/utils.js';
-import { components } from '../internal.js';
+import { components, removeFromReactiveCache } from '../internal.js';
 import { createSignal } from '../reactivity/signal.js';
 import {
   addIndexToTemplate,
@@ -54,13 +54,13 @@ export default function Atom(activatorFunc) {
   const name = activatorFunc.name;
   
   // ─── Mutable closure variables ────────────────────────────────────
-  let element = id;
+  let element = id; // initially string, later the resolved DOM node
   let state = [];
-  let entry = new Map(); // now a `let` so we can nullify it
+  let entry = new Map();
   let delegationSetup = false;
-  let pendingRafId = undefined; // for cancelling render batches
-  let isDestroyed = false; // internal flag
-  let eventHandler = undefined;
+  let pendingRafId; // undefined by default, cancels render batches
+  let isDestroyed = false;
+  let eventHandler;
   
   // ─── Set function ──────────────────────────────────────────────────
   let setFunc = isReactive ? _set : () => {
@@ -73,6 +73,7 @@ export default function Atom(activatorFunc) {
     stylesheet,
     isMounted: false,
     reserved: [],
+    
     _getElement() {
       if (isDestroyed) return null;
       if (typeof element === 'string') {
@@ -80,74 +81,71 @@ export default function Atom(activatorFunc) {
         if (!resolved) {
           throw new Error(`Valen:\nMount node of '${name}' is invalid or not provided`);
         }
-        element = resolved;
+        element = resolved; // cache the DOM node
       }
-     
-     const bindings = nodeBindings.get(element);
-      const cName = bindings.vCName;
-
-      if(cName) {
+      
+      const bindings = nodeBindings.get(element);
+      const cName = bindings?.vCName;
+      if (cName) {
         const component = components.get(cName);
-        if(component) component.atomDeps.add(name);
+        component?.atomDeps.add(name);
       }
       return element;
     },
     
-    clearElement(){
+    clearElement() {
       element = id;
     },
     
     destroy() {
       if (isDestroyed) return;
       
-      // 1. Cancel any pending render batch
+      // Cancel any pending render batch
       if (pendingRafId) {
         cancelAnimationFrame(pendingRafId);
         pendingRafId = null;
       }
       
-      // 2. Remove Atom from global registry
+      // Remove from global registry
       components.delete(name);
       
-      // 3. Remove DOM element (if still attached)
+      // Remove DOM element and delegation
       const el = this._getElement();
-      
       if (el) {
         if (eventHandler) {
           removeEventDelegation(el, eventHandler);
           eventHandler = undefined;
           delegationSetup = undefined;
         }
-        
+        removeFromReactiveCache(el.getElementsByTagName("*"));
         el.replaceChildren();
         el.remove();
       }
       
-      // 5. Clear reactive dependencies
+      // Clear reactive dependencies
       if (isReactive && this.dependencyMap) {
         this.dependencyMap.clear();
         this.dependencyMap = undefined;
       }
       
-      // 6. Clear and nullify closure‑bound collections
+      // Nullify closure‑bound references
       entry.clear();
-      entry = undefined; // break the closure reference
+      entry = undefined;
       state = undefined;
       element = undefined;
       delegationSetup = false;
-      
-      // 7. Break the `set` function reference
       setFunc = undefined;
       
-      // 8. Delete all own enumerable properties (methods, getters, etc.)
-      //    We keep only `name` and a `_isDestroyed` flag.
-      const ownKeys = Reflect.ownKeys(this);
-      for (const key of ownKeys) {
-        delete this[key];
-      }
+      // ─────────────────────────────────────────────────────────────
+      // GUARANTEE: after destroy ONLY 'name' and 'isDestroyed' remain
+      // ─────────────────────────────────────────────────────────────
+      // Remove all own properties (enumerable + non‑enumerable, including getters)
+      Object.getOwnPropertyNames(this).forEach(key => delete this[key]);
       
-      // 9. Mark as destroyed and set a flag on the instance itself
-      isDestroyed = true;
+      // Re‑establish the two required data properties
+      this.name = name; // plain value, no getter
+      this.isDestroyed = true; // plain value
+      isDestroyed = true; // keep closure flag synchronised
     },
     
     reAttach(obj, index) {
@@ -170,7 +168,7 @@ export default function Atom(activatorFunc) {
           addToReactiveCache(container);
         }
       } else if (!this.isMounted) {
-        this.renderWith(obj || this.reserved);
+        this.renderWith(obj ?? this.reserved);
         this.reserved.length = 0;
       }
     },
@@ -183,7 +181,7 @@ export default function Atom(activatorFunc) {
       
       if (!data || typeof data !== 'object') {
         throw new Error(`Valen:\nFirst argument of '${name}.renderWith()' must be an object or array.`);
-      } 
+      }
       
       const el = this._getElement();
       if (!el) return Promise.resolve();
@@ -204,7 +202,6 @@ export default function Atom(activatorFunc) {
         let currentIndex = oldLen;
         
         const processBatch = () => {
-          // If destroyed during batch, stop and resolve early
           if (isDestroyed) {
             resolve();
             return;
@@ -284,8 +281,8 @@ export default function Atom(activatorFunc) {
     type: { get: () => 'Atom', configurable: true }
   });
   
-  // ─── Init style and register ──────────────────────────────────────
-  const styleResult = initiateStyleSheet(`#${id}`, instance);
+  // ─── Initialise stylesheet and register ───────────────────────────
+  initiateStyleSheet(`#${id}`, instance);
   components.set(name, instance);
   
   return instance;

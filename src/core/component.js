@@ -1,7 +1,6 @@
-import { components } from '../internal.js';
+import { components, removeFromReactiveCache } from '../internal.js';
 import { createSignal } from '../reactivity/signal.js';
 import { initiateStyleSheet } from '../dom/utils.js';
-
 
 export default function Component(componentFunc) {
   const componentName = componentFunc.name;
@@ -27,65 +26,99 @@ export default function Component(componentFunc) {
   let cssInjected = false;
   let atomDeps = new Set();
   
-  const _state = createSignal(instance.state, instance);
+  let _state = createSignal(instance.state, instance);
   
+  let isDestroyed = false;
+  
+  instance.destroy = function() {
+    if (isDestroyed) return;
+    
+    components.delete(componentName);
+    
+    const el = instance.element;
+    if (el) {
+      removeFromReactiveCache(el.getElementsByTagName("*"));
+      el.replaceChildren();
+      el.remove();
+    }
+    
+    if (instance.isReactive && instance.dependencyMap) {
+      instance.dependencyMap.clear();
+      instance.dependencyMap = undefined;
+    }
+    
+    // Clean up internal references
+    atomDeps = undefined;
+    _state = undefined;
+    instance.element = undefined;
+    instance.isMounted = false;
+    
+    // -----------------------------------------------
+    // GUARANTEE: only 'name' and 'isDestroyed' remain
+    // -----------------------------------------------
+    // Remove ALL own properties (enumerable + non‑enumerable) EXCEPT 'name'
+    Object.getOwnPropertyNames(instance).forEach(key => {
+      if (key !== 'name') delete instance[key];
+    });
+    
+    // Now set a plain data property for isDestroyed
+    instance.isDestroyed = true;
+    isDestroyed = true; // keep local guard variable in sync
+  };
+  
+  // Make getter properties configurable so they can be deleted during destroy
   Object.defineProperties(instance, {
     type: {
-      get: () => "Component"
+      get: () => "Component",
+      configurable: true
     },
-    atomDeps: { get: () => atomDeps },
+    atomDeps: {
+      get: () => atomDeps,
+      configurable: true
+    },
     state: {
-    get: () => _state,
-    set: (newstate) => {
-      if (instance.isFrozen) return;
-      
-      // Hardened object validation
-      if (!newstate || typeof newstate !== "object" || Array.isArray(newstate)) {
-        console.warn(`Value of '${componentName}.state' must be a plain object`);
-        return;
-      }
-      
-      // 4. MEMORY & SPEED: Bypass the getter completely and use Object.assign
-      Object.assign(_state, newstate);
-      return true;
+      get: () => _state,
+      set: (newstate) => {
+        if (instance.isFrozen) return;
+        if (!newstate || typeof newstate !== "object" || Array.isArray(newstate)) {
+          console.warn(`Value of '${componentName}.state' must be a plain object`);
+          return;
+        }
+        Object.assign(_state, newstate);
+        return true;
+      },
+      configurable: true
     },
-    configurable: true,
+    isDestroyed: {
+      get: () => isDestroyed,
+      configurable: true
     }
   });
   
   // 5. LIFECYCLE OPTIMIZATION: Avoid `.bind()` memory allocation
-  if (typeof instance.created === "function") {
-    // Call directly with 'instance' as the 'this' context.
-    // Also pass '_state' directly to avoid triggering the instance.state getter we just defined.
-    instance.created.call(instance, _state);
-    instance.created = undefined; // 'undefined' is preferred over 'null' for V8 hidden classes
-  }
+  //    Optional chaining keeps `this` as `instance`, equivalent to `.call(instance, _state)`
+  instance.created?.(_state);
+  instance.created = undefined; // prefer undefined for V8 hidden classes
   
-  // The Execution Function
+  // The Execution Function (registered in the global component map)
   const func = () => {
     if (!instance.isMounted) {
       instance.isFrozen = false;
       instance.name = componentName;
-      
-      // 6. SPEED: Avoid the 'in' operator, use Nullish Coalescing
       instance.useStrict = instance.useStrict ?? true;
       instance.element = `valen${componentName}`;
       
-      // The One-Time CSS Evaluation
+      // One‑time CSS evaluation
       if (instance.stylesheet && !cssInjected) {
         initiateStyleSheet(`#${instance.element}`, instance);
         cssInjected = true;
       }
       
-      // Clean up (undefined > null)
       instance.stylesheet = undefined;
     }
-    
     return instance;
   };
   
-  // Register globally for template interpolation
   components.set(componentName, func);
-  
   return instance;
 }
