@@ -241,15 +241,21 @@ const KNOWN_STYLE_PROPS = new Set([
 
 
 function generateDataVA(child, isParent, instance) {
+  if (child instanceof SVGElement) return [];
+  
   const arr = [];
   const attributes = getAttributes(child);
-  let VAID = child.getAttribute("data-valen_id");
   const { name, type, useStrict } = instance;
+  
+  // Defer DOM read until a template actually requires it
+  let VAID = null;
+  let hasCheckedVAID = false;
   
   if (!isParent) {
     let hasExplicitContentDirective = false;
+    const len = attributes.length; // Cache length for micro-optimization
     
-    for (let i = 0; i < attributes.length; i++) {
+    for (let i = 0; i < len; i++) {
       if (CONTENT_DIRECTIVES.has(attributes[i].attribute)) {
         hasExplicitContentDirective = true;
         break;
@@ -263,72 +269,70 @@ function generateDataVA(child, isParent, instance) {
   }
   
   const childStyle = child.style;
+  const attrLen = attributes.length;
   
-  for (let i = 0; i < attributes.length; i++) {
+  for (let i = 0; i < attrLen; i++) {
     let { attribute, value } = attributes[i];
     value = value || '';
     
-    if(attribute === 'class') attribute = 'className';
+    if (attribute === 'class') attribute = 'className';
     
     if (type === 'Component' && attribute === 'id') {
       child.setAttribute("data-__v_cname__", name);
     }
     
-    let once = false;
-    const isOnType = attribute.startsWith("on");
+    // Fast char code checks for string prefixes
+    const firstChar = attribute.charCodeAt(0);
     
-    if (isOnType) {
-      throw Error(`Valen\n:Event names must start with '@'.\nRefer to '${child.outerHTML}'.`)
+    // 111 is 'o', 110 is 'n'
+    if (firstChar === 111 && attribute.charCodeAt(1) === 110) {
+      throw Error(`Valen\n:Event names must start with '@'.\nRefer to '${child.outerHTML}'.`);
     }
     
-    const isEvent = attribute.startsWith("@");
-    
-    if (isEvent) {
-      if (child.getAttribute(attribute)) {
-        child.setAttribute("data-v-on", attribute.slice(1))
+    // 64 is '@'
+    if (firstChar === 64) {
+      // Use the existing `value` instead of a slow child.getAttribute() DOM read
+      if (value) {
+        child.setAttribute("data-v-on", attribute.slice(1));
         child.setAttribute("data-v-exp", value.trim());
-        child.removeAttribute(attribute);
-        continue;
-      } else {
-        child.removeAttribute(attribute);
-        continue;
       }
+      child.removeAttribute(attribute);
+      continue;
     }
     
+    let once = false;
     [attribute, value, once] = convertDirective(attribute, value, child);
     
     const hasTemplate = value.indexOf('[') !== -1 && value.indexOf(']') !== -1;
     
-    const isStyle = attribute !== 'src' && KNOWN_STYLE_PROPS.has(attribute) || attribute !== 'src' && (attribute in childStyle);
+    // Optimized boolean logic: group the `!== 'src'` check
+    const isStyle = attribute !== 'src' && (KNOWN_STYLE_PROPS.has(attribute) || attribute in childStyle);
     
-    if (!hasTemplate) {
-      if (isStyle) {
-        childStyle[attribute] = value;
-        child.removeAttribute(attribute);
-      } else {
-        child[ATTR_TO_PROP[attribute] || attribute] = value;
-      }
-      continue;
+    // Consolidate duplicated assignment logic
+    const finalValue = hasTemplate ? evaluateTemplate(value, instance) : value;
+    
+    if (isStyle) {
+      childStyle[attribute] = finalValue;
+      child.removeAttribute(attribute);
+    } else {
+      child[ATTR_TO_PROP[attribute] || attribute] = finalValue;
     }
     
-    const evaluation = evaluateTemplate(value, instance);
+    if (!hasTemplate) continue;
+    
+    // Lazy evaluation: Only touch the DOM for VAID if a template is actually found
+    if (!hasCheckedVAID) {
+      VAID = child.getAttribute("data-valen_id");
+      hasCheckedVAID = true;
+    }
     
     if (!VAID) {
       VAID = `va${ctx.counterVA++}`;
       child.setAttribute('data-valen_id', VAID);
     }
     
-    if (isStyle) {
-      childStyle[attribute] = evaluation;
-      child.removeAttribute(attribute);
-    } else {
-      child[ATTR_TO_PROP[attribute] || attribute] = evaluation;
-    }
-    
     const expression = b(value).trim();
-    // Char code lookup is the fastest way to check the first character
     const isGlobal = expression.charCodeAt(0) === 36; // 36 is '$'
-    
     
     const entryObj = {
       template: value,
@@ -338,7 +342,6 @@ function generateDataVA(child, isParent, instance) {
       once
     };
     
-
     if (isGlobal) {
       GLOBAL_STATE.dataVA.push(entryObj);
     } else {
@@ -347,7 +350,7 @@ function generateDataVA(child, isParent, instance) {
   }
   
   return arr;
-};
+}
 
 
 
