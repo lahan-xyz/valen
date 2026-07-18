@@ -1,4 +1,4 @@
-import { ctx, stylesheet, LRUCache, sharedTemplate, stringBetween, reactiveCache, removeFromReactiveCache, GLOBAL_STATE, updateQueue, components } from '../internal.js'
+import { ctx, stylesheet, LRUCache, sharedTemplate, stringBetween, reactiveCache, removeFromReactiveCache, GLOBAL_STATE, components } from '../internal.js'
 import { initiateComponents, evaluateTemplate } from '../parser/utils.js';
 
 
@@ -69,8 +69,7 @@ function scheduleFlush() {
   }
 }
 
-// --- FIX 5: flushUpdates — swap references instead of cloning the Map ---
-// A Map where Key = DOM Node, Value = Object of properties to update
+
 let updateMap = new Map();
 
 function batchedUpdate(child, key, evaluated) {
@@ -84,9 +83,6 @@ function batchedUpdate(child, key, evaluated) {
 }
 
 function flushUpdates() {
-  // Swap the reference — zero allocation cost.
-  // Any updates that arrive DURING this flush go into the fresh map,
-  // preventing them from being lost or causing re-entrancy bugs.
   const batch = updateMap;
   updateMap = new Map();
   ctx.microtaskPending = false;
@@ -102,9 +98,9 @@ function flushUpdates() {
 
 
 function updateComponent(changedKey, instance) {
-  const dependencyMap = instance === null ? GLOBAL_STATE.dependencyMap : instance.dependencyMap;
+  const dependencyMap = !instance ? GLOBAL_STATE.dependencyMap : instance.dependencyMap;
   const subscribers = dependencyMap.get(changedKey);
-  
+
   if (!subscribers) return;
   
   for (const subscriber of subscribers) {
@@ -121,7 +117,7 @@ function updateComponent(changedKey, instance) {
   }
 }
 
-// --- FIX 6: objToStyle — hoist invariant `isMedia` outside the loop ---
+
 function objToStyle(selector = "", obj = {}, alt = "", shouldSwitch) {
   const lines = [];
   // `alt` never changes during iteration — compute once, not per-key
@@ -225,15 +221,6 @@ const ATTR_TO_PROP = {
 
 const CONTENT_DIRECTIVES = new Set(['v:text', 'v:html', 'v:once:text', 'v:once:html']);
 
-// --- generateDataVA ---
-// - Work directly on the live NamedNodeMap (no Array.from + .map allocation)
-// - Gate innerHTML/textContent read behind a real template-presence check
-//   instead of unconditionally pushing a potentially enormous string
-// - Replace `attribute in childStyle\` prototype walk with a known CSS property Set
-//   for the most common attributes, falling back only when necessary
-
-// A Set of known CSS property names that would collide with element properties.
-// Checking a Set is O(1) hash lookup vs O(n) prototype chain walk on CSSStyleDeclaration.
 
 const KNOWN_STYLE_PROPS = new Set([
   'color', 'background', 'background-color', 'border', 'border-color', 'border-width',
@@ -280,6 +267,8 @@ function generateDataVA(child, isParent, instance) {
   for (let i = 0; i < attributes.length; i++) {
     let { attribute, value } = attributes[i];
     value = value || '';
+    
+    if(attribute === 'class') attribute = 'className';
     
     if (type === 'Component' && attribute === 'id') {
       child.setAttribute("data-__v_cname__", name);
@@ -340,6 +329,7 @@ function generateDataVA(child, isParent, instance) {
     // Char code lookup is the fastest way to check the first character
     const isGlobal = expression.charCodeAt(0) === 36; // 36 is '$'
     
+    
     const entryObj = {
       template: value,
       key: isStyle ? `style.${attribute}` : attribute,
@@ -348,6 +338,7 @@ function generateDataVA(child, isParent, instance) {
       once
     };
     
+
     if (isGlobal) {
       GLOBAL_STATE.dataVA.push(entryObj);
     } else {
@@ -359,15 +350,7 @@ function generateDataVA(child, isParent, instance) {
 };
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// OPTIMIZED: buildDependencyMap
-// Changes:
-//   • Eliminates the O(n×m) nested forEach.
-//     Instead we build an inverted index from template-token → [entry] once,
-//     then each depArr item does a single O(1) Map lookup — total O(n+m).
-//   • Fixes the typo `ctx.globurrentDepArr` → `ctx.globalCurrentDepArr` so
-//     globals are actually cleared (was a silent memory-leak bug).
-// ─────────────────────────────────────────────────────────────────────────────
+
 function buildDependencyMap(instance, data) {
   if (!instance.dependencyMap) instance.dependencyMap = new Map();
   
@@ -397,7 +380,7 @@ function buildDependencyMap(instance, data) {
   if (ctx.globalCurrentDepArr.length) build(false, ctx.globalCurrentDepArr);
   
   ctx.currentDepArr = [];
-  ctx.globurrentDepArr = [];
+  ctx.globalCurrentDepArr = [];
   GLOBAL_STATE.dataVA = [];
 }
 
@@ -409,19 +392,12 @@ BARE_WRAPPER.style.cssText = 'display: contents; font: inherit; color: inherit;'
 function wrapBareExpressions(root) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   
-  // Collect nodes that need wrapping first — we MUST collect before mutating
-  // because inserting a span would corrupt the walker's position mid-traversal.
-  // The array is unavoidable, but we eliminate the childElementCount DOM traversal.
   const nodesToWrap = [];
   
   let node;
   while ((node = walker.nextNode())) {
     const text = node.nodeValue;
     
-    // indexOf is faster than includes() on older engines, keep it.
-    // Replace childElementCount (full subtree count) with a single
-    // O(1) sibling pointer check. If either sibling exists, this text
-    // node is mixed-content, which is the condition we actually care about.
     if (
       text.indexOf('[') !== -1 &&
       text.indexOf(']') !== -1 &&
@@ -473,9 +449,7 @@ function processComponentMarkup(jsx, instance, subId) {
     }
     
     buildDependencyMap(instance, data);
-    // Return the fragment directly — zero serialization cost.
-    // The caller must call document.adoptNode(fragment) or append it
-    // directly instead of re-parsing a string.
+
     return fragment;
     
   } catch (error) {
@@ -512,7 +486,6 @@ function processReactiveNode(node) {
   }
   
   // 2. Process Reactive ID
-  // Note: This stays in your original string-based reactiveCache map.
   const valen_id = node.getAttribute('data-valen_id');
   if (valen_id && !reactiveCache.has(valen_id)) {
     reactiveCache.set(valen_id, node);
@@ -550,12 +523,7 @@ function addToReactiveCache(parent) {
     processReactiveNode(node);
   }
 }
-/*
 
-**What changed:** `node.dataset.valen_id` forces creation of a `DOMStringMap` proxy object on every node in Chromium's older fast-path. `getAttribute('data-valen_id')` is a direct hash lookup into the element's attribute table — no proxy allocation. Minor but accumulates across large trees.
-
----
-*/
 
 const DELEGATED_EVENTS = new Set(['click', 'input', 'submit', 'change', 'keydown']);
 
@@ -631,7 +599,7 @@ const renderComponent = (instance, name, flag, toFrag) => {
   const innerTemplate = typeof instance.template === 'function' ?
     instance.template(instance.state) :
     instance.template;
-  
+    
   // 3. Clean string assignment
   let template = flag ?
     innerTemplate :

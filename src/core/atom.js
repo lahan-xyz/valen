@@ -9,7 +9,6 @@ import {
 import { components, removeFromReactiveCache } from '../internal.js';
 import { createSignal } from '../reactivity/signal.js';
 import {
-  addIndexToTemplate,
   initiateComponents,
   initiateWidgets,
   initiateExtendedWidgets,
@@ -19,10 +18,12 @@ import {
 // Helper to render a single item into a DocumentFragment
 function renderItem(isTemplateFunc, itemData, index, template, isReactive, instance, name) {
   const itemHTML = isTemplateFunc ? template(itemData, index) : template;
-  const indexedHTML = addIndexToTemplate(itemHTML, index);
+
+  instance.currentExecIndex = index;
+
   const processedHTML = isReactive ?
-    initiateComponents(indexedHTML, false, true) :
-    lintPlaceholders(initiateExtendedWidgets(initiateWidgets(indexedHTML)), true);
+    initiateComponents(itemHTML, false, true) :
+    lintPlaceholders(initiateExtendedWidgets(initiateWidgets(itemHTML)), true);
   return processComponentMarkup(processedHTML, instance, name);
 }
 
@@ -32,15 +33,18 @@ function _set(index, value, shallow) {
   
   if (typeof index === 'number') {
     if (value && typeof value === 'object') {
+      this.currentExecIndex = index;
       if (shallow) {
         Object.assign(this.state[index], value);
       } else {
         this.state[index] = value;
       }
+      
     }
   } else if (Array.isArray(index)) {
     const state = this.state;
     for (let i = 0, len = index.length; i < len; i++) {
+      this.currentExecIndex = i;
       state[i] = index[i];
     }
   } else {
@@ -61,7 +65,6 @@ export default function Atom(activatorFunc) {
   let pendingRafId; // undefined by default, cancels render batches
   let isDestroyed = false;
   let eventHandler;
-  
   // ─── Set function ──────────────────────────────────────────────────
   let setFunc = isReactive ? _set : () => {
     console.warn(`Cannot call set on Atom '${name}'. Make sure 'isReactive' is true.`);
@@ -73,6 +76,7 @@ export default function Atom(activatorFunc) {
     stylesheet,
     isMounted: false,
     reserved: [],
+    currentExecIndex: undefined,
     
     _getElement() {
       if (isDestroyed) return null;
@@ -135,7 +139,6 @@ export default function Atom(activatorFunc) {
       element = undefined;
       delegationSetup = false;
       setFunc = undefined;
-      
       // ─────────────────────────────────────────────────────────────
       // GUARANTEE: after destroy ONLY 'name' and 'isDestroyed' remain
       // ─────────────────────────────────────────────────────────────
@@ -277,6 +280,7 @@ export default function Atom(activatorFunc) {
     template: { get: () => template, configurable: true },
     useStrict: { get: () => true, configurable: true },
     entry: { get: () => entry, configurable: true },
+  //  currentExecIndex: { get: () => currentExecIndex, configurable: true },
     isReactive: { get: () => isReactive, configurable: true },
     type: { get: () => 'Atom', configurable: true }
   });

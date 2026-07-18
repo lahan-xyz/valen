@@ -39,6 +39,7 @@ function AppView() {
         const result = new Array(len); // Pre-allocate memory
         
         for (let i = 0; i < len; i++) {
+          if(!questionsArray[i].src) questionsArray[i].src = null;
           // Prefix increment bumps the number before assignment
           result[i] = { ...questionsArray[i], quest_no: ++idxStart, year: state.currentYear };
         }
@@ -107,7 +108,7 @@ function AppView() {
           <select aria-label="Select Year" class="app-select"
             v:value=[ currentYear ]
             @change=[ this.changeYear(value); ]>
-            ${YEARS.map(year => `<option value="${year}"  ${ year === state.currentYear ? 'selected="true"' : '' }>${year}</option>`).join('')}
+            ${YEARS.map(year => `<option value="${year}"  ${ year == state.currentYear ? 'selected="true"' : '' }>${year}</option>`).join('')}
           </select>
           <div class="page-nav">
             <button class="page-btn" @click=[ this.previousPage() ]>← Prev</button>

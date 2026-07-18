@@ -1,5 +1,5 @@
-import { ctx, components, LRUCache, sharedTemplate, stringBetween, updateQueue, widgets } from '../internal.js';
-import { renderComponent, initiateStyleSheet } from '../dom/utils.js';
+import { ctx, components, LRUCache, widgets } from '../internal.js';
+import { renderComponent } from '../dom/utils.js';
 
 
 const lintedCache = new LRUCache();
@@ -60,9 +60,6 @@ const lintPlaceholders = (html, isWidget) => {
       lastIndex = i;
       startRegex.lastIndex = i; 
     } 
-    // If depth !== 0, the HTML is malformed (missing closing bracket).
-    // We safely ignore it, let the loop continue, and it will be caught 
-    // by the final substring append.
   }
 
   // Append any remaining HTML after the last match
@@ -72,24 +69,28 @@ const lintPlaceholders = (html, isWidget) => {
   return result;
 };
 
+
+
 const lexerCache = new LRUCache(500);
 
-// Pre-calculated ASCII constants for V8 optimization
+// Pre-calculated ASCII constants
 const C_SPACE = 32, C_TAB = 9, C_NL = 10, C_CR = 13;
-const C_EQ = 61, C_GT = 62, C_LT = 60, C_SLASH = 47, C_BRACKET_OPEN = 91;
+const C_EQ = 61, C_GT = 62, C_LT = 60, C_SLASH = 47;
+const C_QUOTE_D = 34, C_QUOTE_S = 39, C_BACKTICK = 96;
+const C_BRACKET_O = 91, C_BRACKET_C = 93, C_BACKSLASH = 92;
+const C_HYPHEN = 45, C_COLON = 58;
 
 function isWhitespace(code) {
   return code === C_SPACE || code === C_TAB || code === C_NL || code === C_CR;
 }
 
-function isBoundary(code) {
-  return isWhitespace(code) || code === C_EQ || code === C_GT || code === C_LT || code === C_SLASH;
-}
+// Hoisted for V8 monomorphism — single object shape
+const CHUNK_TEXT = { isExpr: false, val: '' };
+const CHUNK_EXPR = { isExpr: true, val: '' };
 
 function lexTemplate(templateString) {
-  if (lexerCache.has(templateString)) {
-    return lexerCache.get(templateString);
-  }
+  const cached = lexerCache.get(templateString);
+  if (cached !== undefined) return cached;
   
   const chunks = [];
   const len = templateString.length;
@@ -99,33 +100,51 @@ function lexTemplate(templateString) {
   let startIdx = 0;
   let exprStart = -1;
   
+  // Attribute tracking state
   let currentAttrName = '';
   let gatheringAttrName = false;
   let attrNameStart = 0;
+  
+  // Local var for string to avoid repeated property access
+  const str = templateString;
 
   for (let i = 0; i < len; i++) {
-    const code = templateString.charCodeAt(i);
+    const code = str.charCodeAt(i);
     
-    // Track HTML attribute names
+    // --- HTML ATTRIBUTE NAME TRACKING (depth === 0 only) ---
     if (depth === 0) {
-      if (isBoundary(code) && code !== C_EQ) {
+      if (code === C_EQ) {
+        gatheringAttrName = false;
+        // Trim manually — faster than .trim() for short strings
+        let s = attrNameStart;
+        let e = i;
+        while (s < e && isWhitespace(str.charCodeAt(s))) s++;
+        while (e > s && isWhitespace(str.charCodeAt(e - 1))) e--;
+        currentAttrName = str.slice(s, e);
+      } else if (gatheringAttrName) {
+        // Continue gathering — check if boundary hit
+        if (isWhitespace(code) || code === C_GT || code === C_LT || code === C_SLASH) {
+          gatheringAttrName = true;
+          attrNameStart = i + 1;
+        }
+      } else if (isWhitespace(code) || code === C_GT || code === C_LT || code === C_SLASH) {
         gatheringAttrName = true;
         attrNameStart = i + 1;
-      } else if (code === C_EQ) {
-        gatheringAttrName = false;
-        currentAttrName = templateString.slice(attrNameStart, i).trim();
       }
     }
     
-    // 1. NATIVE EVENT SKIPPING ONLY
-    // We removed the '@' check! Now it ONLY skips native DOM events like 'onclick'.
-    // This allows Valen to dive into @change="[ ... ]" and extract your signal logic.
-    if (depth === 0 && (code === 34 || code === 39)) { 
-      if (currentAttrName.startsWith('on')) {
+    // --- NATIVE EVENT SKIPPING (depth === 0, quotes only) ---
+    if (depth === 0 && (code === C_QUOTE_D || code === C_QUOTE_S)) {
+      // Fast path: check attr name starts with 'on'
+      if (currentAttrName.length >= 2 && 
+          currentAttrName.charCodeAt(0) === 111 && // 'o'
+          currentAttrName.charCodeAt(1) === 110) { // 'n'
         let closingIdx = i + 1;
+        // Unroll first check for speed
         while (closingIdx < len) {
-          if (templateString.charCodeAt(closingIdx) === code && templateString.charCodeAt(closingIdx - 1) !== 92) { 
-            break;
+          if (str.charCodeAt(closingIdx) === code) {
+            const prev = str.charCodeAt(closingIdx - 1);
+            if (prev !== C_BACKSLASH) break;
           }
           closingIdx++;
         }
@@ -136,38 +155,43 @@ function lexTemplate(templateString) {
       }
     }
     
-    // 2. INTERNAL QUOTE TRACKING
-    if (depth > 0 && (code === 34 || code === 39 || code === 96) && templateString.charCodeAt(i - 1) !== 92) {
-      if (!inQuote) {
-        inQuote = true;
-        quoteCode = code;
-      } else if (quoteCode === code) {
-        inQuote = false;
-        quoteCode = 0;
+    // --- INTERNAL QUOTE TRACKING (depth > 0) ---
+    if (depth > 0) {
+      if (code === C_QUOTE_D || code === C_QUOTE_S || code === C_BACKTICK) {
+        const prev = str.charCodeAt(i - 1);
+        if (prev !== C_BACKSLASH) {
+          if (!inQuote) {
+            inQuote = true;
+            quoteCode = code;
+          } else if (quoteCode === code) {
+            inQuote = false;
+            quoteCode = 0;
+          }
+        }
       }
     }
     
-    // 3. STRUCTURAL BRACKET TRACKING
+    // --- STRUCTURAL BRACKET TRACKING ---
     if (!inQuote) {
-      if (code === 91) { // '['
-        
-        const prevCode = templateString.charCodeAt(i - 1);
-        if (depth === 0 && (prevCode === 45 || prevCode === 58)) {
-          continue; // Skip static CSS framework classes
+      if (code === C_BRACKET_O) {
+        const prevCode = i > 0 ? str.charCodeAt(i - 1) : 0;
+        // Skip static CSS framework classes [- or :[
+        if (depth === 0 && (prevCode === C_HYPHEN || prevCode === C_COLON)) {
+          continue;
         }
 
         if (depth === 0) {
           if (startIdx < i) {
-            chunks.push({ isExpr: false, val: templateString.slice(startIdx, i) });
+            chunks.push({ isExpr: false, val: str.slice(startIdx, i) });
           }
           exprStart = i;
         }
         depth++;
-      } else if (code === 93) { // ']'
+      } else if (code === C_BRACKET_C) {
         if (depth > 0) {
           depth--;
           if (depth === 0) {
-            chunks.push({ isExpr: true, val: templateString.slice(exprStart + 1, i) });
+            chunks.push({ isExpr: true, val: str.slice(exprStart + 1, i) });
             startIdx = i + 1;
           }
         }
@@ -176,7 +200,7 @@ function lexTemplate(templateString) {
   }
   
   if (startIdx < len) {
-    chunks.push({ isExpr: false, val: templateString.slice(startIdx) });
+    chunks.push({ isExpr: false, val: str.slice(startIdx) });
   }
   
   lexerCache.set(templateString, chunks);
@@ -184,68 +208,100 @@ function lexTemplate(templateString) {
 }
 
 
-
 const ENTITY_REGEX = /&(gt|lt);/g;
 const evaluatorCache = new LRUCache(500);
 
 function evaluateTemplate(templateString, instance) {
   const chunks = lexTemplate(templateString);
+  const chunkLen = chunks.length;
   
-  // Fast exit: If it's just one chunk of text, no expressions exist
-  if (chunks.length === 1 && !chunks[0].isExpr) return templateString;
+  // Fast exit: pure text
+  if (chunkLen === 1 && !chunks[0].isExpr) return templateString;
+  
+  let added = '';
+  let hasStateArg = true;
+  
+  if (instance.type === 'Atom') {
+    const idx = instance.currentExecIndex;
+    let cacheKey = instance._destCache;
+    
+    if (!cacheKey) {
+      cacheKey = {};
+      instance._destCache = cacheKey;
+    }
+    
+    let destSrc = cacheKey[idx];
+    if (destSrc === undefined) {
+      const atomState = instance.state[idx];
+      const keys = Object.keys(atomState);
+      destSrc = keys.length ? `const{${keys.join(',')}}=this.state[this.currentExecIndex];` : '';
+      cacheKey[idx] = destSrc;
+    }
+    
+    added = destSrc;
+    hasStateArg = false;
+  }
   
   let combinedHTML = '';
   
-  for (let i = 0; i < chunks.length; i++) {
+  for (let i = 0; i < chunkLen; i++) {
     const chunk = chunks[i];
     
-    // If it's standard HTML text, just append it and move on
     if (!chunk.isExpr) {
       combinedHTML += chunk.val;
       continue;
     }
     
-    // --- EXPRESSION EVALUATION ---
     const innerContent = chunk.val;
-    ctx.currentTemplate = innerContent; // Reactivity dependency trap
+    ctx.currentTemplate = innerContent;
     
-    const ext = innerContent.replace(ENTITY_REGEX, (_, entity) =>
-      entity === 'gt' ? '>' : '<'
-    ).trim();
+    // Entity decode + manual trim
+    let ext = innerContent.replace(ENTITY_REGEX, (_, e) => e === 'gt' ? '>' : '<');
+    let start = 0;
+    let end = ext.length;
+    
+    while (start < end && ext.charCodeAt(start) <= 32) start++;
+    while (end > start && ext.charCodeAt(end - 1) <= 32) end--;
+    if (start !== 0 || end !== ext.length) ext = ext.slice(start, end);
     
     if (!ext) continue;
     
     const isGlobal = ext.charCodeAt(0) === 36; // '$'
     
-    let evaluator = evaluatorCache.get(ext);
+    // Cache key must include destructuring context to avoid cross‑index contamination
+    const cacheKey = hasStateArg ? ext : `${added}|${ext}`;
+    let evaluator = evaluatorCache.get(cacheKey);
+    
     if (!evaluator) {
       try {
-        const source = isGlobal ? ` return ${ ext };` : `with(state) { return ${ ext }; }`;
+        const source = isGlobal ?
+          `return ${ext};` :
+          (hasStateArg ? `with(state){return ${ext};}` : `${added}return ${ext};`);
         
-        // Pass 'state' as the argument name
-        evaluator = new Function("state", source);
-        evaluatorCache.set(ext, evaluator);
+        evaluator = hasStateArg ? new Function('state', source) : new Function(source);
+        evaluatorCache.set(cacheKey, evaluator);
       } catch (err) {
-        console.warn(`
-        Valen Syntax Error in \`${innerContent}\`\n`, err); combinedHTML += `[${innerContent}]`; // Output raw bracket if it fails
-      continue;
+        console.warn(`Valen Syntax Error in \`${innerContent}\`\n`, err);
+        combinedHTML += `[${innerContent}]`;
+        continue;
+      }
+    }
+    
+    try {
+      const result = isGlobal ?
+        evaluator() :
+        (hasStateArg ? evaluator.call(instance, instance.state) : evaluator.call(instance));
+      
+      if (result != null && result === result) {
+        combinedHTML += result;
+      }
+    } catch (error) {
+      console.warn(`Valen Execution Error in \`${innerContent}\`\n`, error);
     }
   }
   
-  try {
-    // Pass instance.state directly into the function execution
-    const parsed = isGlobal ? evaluator() : evaluator.call(instance, instance.state);
-    
-    if (parsed != null && !Number.isNaN(parsed)) {
-      combinedHTML += parsed;
-    }
-  } catch (error) {
-    console.warn(`Valen Execution Error in \`${innerContent}\`\n`, error);
-  }
-}
-
-ctx.currentTemplate = "";
-return combinedHTML;
+  ctx.currentTemplate = '';
+  return combinedHTML;
 }
 
 
@@ -565,30 +621,5 @@ const initiateExtendedWidgets = (markup) => {
   }
 };
 
-function addIndexToTemplate(str, index, instance) {
-  str = lintPlaceholders(str);
-  const chunks = lexTemplate(str);
-  
-  let combined = "";
-  
-  if (!chunks.length || chunks.length === 1 && !chunks[0].isExpr) return str;
-  
-  for (var i = 0, len = chunks.length; i < len; i++) {
-    const chunk = chunks[i],
-      val = chunk.val;
-    
-    if (!chunk.isExpr) {
-      combined += val;
-      continue;
-    }
-    
-    combined += `[this.state[${index}].${val.trim()}]`;
-  }
-  
-  const linted = lintPlaceholders(combined);
-  
-  return instance ? evaluateTemplate(linted, instance) : linted;
-}
 
-
-export { lexTemplate, evaluateTemplate, initiateComponents, initiateWidgets, renderWidget, renderTemplate, initiateExtendedWidgets, lintPlaceholders, addIndexToTemplate }
+export { lexTemplate, evaluateTemplate, initiateComponents, initiateWidgets, renderWidget, renderTemplate, initiateExtendedWidgets, lintPlaceholders }

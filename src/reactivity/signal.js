@@ -18,8 +18,8 @@ function createSignal(state, object) {
     const proxy = new Proxy(obj, {
       get(target, key) {
         if (ctx.currentTemplate) {
-          const temp = ctx.currentComponent;
-          ctx.currentDepArr.push({ temp: ctx.currentTemplate, key });
+          const temp = ctx.currentTemplate;
+          ctx.currentDepArr.push({ temp, key });
         }
         // Recursively wrap nested objects, but now cached
         return createReactiveObject(target[key]);
