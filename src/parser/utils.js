@@ -222,7 +222,7 @@ function evaluateTemplate(templateString, instance) {
   let hasStateArg = true;
   
   if (instance.type === 'Atom') {
-    const idx = instance.currentExecIndex;
+    const idx = instance.executingIndex;
     let cacheKey = instance._destCache;
     
     if (!cacheKey) {
@@ -234,7 +234,7 @@ function evaluateTemplate(templateString, instance) {
     if (destSrc === undefined) {
       const atomState = instance.state[idx];
       const keys = Object.keys(atomState);
-      destSrc = keys.length ? `const{${keys.join(',')}}=this.state[this.currentExecIndex];` : '';
+      destSrc = keys.length ? `const{${keys.join(',')}}=this.state[this.executingIndex];` : '';
       cacheKey[idx] = destSrc;
     }
     
@@ -292,11 +292,12 @@ function evaluateTemplate(templateString, instance) {
         evaluator() :
         (hasStateArg ? evaluator.call(instance, instance.state) : evaluator.call(instance));
       
-      if (result != null && result === result) {
+      if (result != null && !Number.isNaN(result)) {
         combinedHTML += result;
       }
     } catch (error) {
       console.warn(`Valen Execution Error in \`${innerContent}\`\n`, error);
+      combinedHTML += `[${innerContent}]`
     }
   }
   
@@ -400,7 +401,7 @@ const renderWidget = (instance, data, children) => {
   if (instance) {
     // Create a variable that holds the template
     const className = instance.className;
-    let template = instance.template instanceof Function ? instance.template(data) : instance.template;
+    let template = instance.template instanceof Function ? instance.template(data, children) : instance.template;
     
     if (children) {
       template = template.replaceAll("</>", children || "");
@@ -517,7 +518,7 @@ function clearAllWidgetCaches() {
 
 const componentRegex = /<(\/?[A-Z]\w*)(\s*\(\{[\s\S]*?}\))?\s*>/g;
 
-const initiateExtendedWidgets = (markup) => {
+function initiateExtendedWidgets(markup){
   if (componentRegex.test(markup)) {
     // Step 1: Convert component tags to custom elements with va-attrs
     const convertedMarkup = markup.replace(componentRegex, (match, p1, p2) => {

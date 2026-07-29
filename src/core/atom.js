@@ -2,8 +2,6 @@ import {
   initiateStyleSheet,
   processComponentMarkup,
   addToReactiveCache,
-  setupEventDelegation,
-  removeEventDelegation,
   nodeBindings
 } from '../dom/utils.js';
 import { components, removeFromReactiveCache } from '../internal.js';
@@ -15,58 +13,54 @@ import {
   lintPlaceholders
 } from '../parser/utils.js';
 
+// Extracted to module level to prevent per-item string allocation and CSSOM parsing overhead
+const WRAPPER_STYLE = 'all:initial!important;display:block!important;color:inherit!important;font:inherit!important;';
+
 // Helper to render a single item into a DocumentFragment
 function renderItem(isTemplateFunc, itemData, index, template, isReactive, instance, name) {
   const itemHTML = isTemplateFunc ? template(itemData, index) : template;
-
-  instance.currentExecIndex = index;
-
+  
+  instance.executingIndex = index;
+  
   const processedHTML = isReactive ?
     initiateComponents(itemHTML, false, true) :
     lintPlaceholders(initiateExtendedWidgets(initiateWidgets(itemHTML)), true);
+  
   return processComponentMarkup(processedHTML, instance, name);
 }
 
-function _set(index, value, shallow) {
-  if (!this.isReactive) throw new Error(`Valen:\nCannot call 'set()' on Atom ${this.name}.`);
-  if (this._isDestroyed || !this.isMounted) return;
+function _set(index, value) {
+  if (this.isDestroyed || !this.isMounted) return;
   
   if (typeof index === 'number') {
     if (value && typeof value === 'object') {
-      this.currentExecIndex = index;
-      if (shallow) {
-        Object.assign(this.state[index], value);
-      } else {
-        this.state[index] = value;
-      }
-      
+      this.executingIndex = index;
+      this.state[index] = value;
     }
   } else if (Array.isArray(index)) {
-    const state = this.state;
     for (let i = 0, len = index.length; i < len; i++) {
-      this.currentExecIndex = i;
-      state[i] = index[i];
+      this.executingIndex = i;
+      this.state[i] = index[i];
     }
   } else {
-    console.warn(`Valen:\nFirst Argument passed to '${this.name}.set()' must be a number or an array.`);
+    console.warn(`Valen:\nFirst Argument passed to '${name}.set()' must be a number or an array.`);
   }
 }
 
 export default function Atom(activatorFunc) {
   const options = activatorFunc();
-  const { id, template, isReactive, stylesheet } = options;
+  const { id, template, isReactive, stylesheet, created, onCleanup } = options;
   const name = activatorFunc.name;
   
   // ─── Mutable closure variables ────────────────────────────────────
   let element = id; // initially string, later the resolved DOM node
   let state = [];
   let entry = new Map();
-  let delegationSetup = false;
   let pendingRafId; // undefined by default, cancels render batches
   let isDestroyed = false;
-  let eventHandler;
+  
   // ─── Set function ──────────────────────────────────────────────────
-  let setFunc = isReactive ? _set : () => {
+  const setFunc = isReactive ? _set : () => {
     console.warn(`Cannot call set on Atom '${name}'. Make sure 'isReactive' is true.`);
   };
   
@@ -75,8 +69,10 @@ export default function Atom(activatorFunc) {
     dependencyMap: isReactive ? new Map() : undefined,
     stylesheet,
     isMounted: false,
+    created,
+    onCleanup,
     reserved: [],
-    currentExecIndex: undefined,
+    executingIndex: 0,
     
     _getElement() {
       if (isDestroyed) return null;
@@ -103,59 +99,54 @@ export default function Atom(activatorFunc) {
     
     destroy() {
       if (isDestroyed) return;
+      isDestroyed = true; // Set immediately to prevent re-entrancy
       
-      // Cancel any pending render batch
       if (pendingRafId) {
         cancelAnimationFrame(pendingRafId);
-        pendingRafId = null;
+        pendingRafId = undefined;
       }
       
-      // Remove from global registry
       components.delete(name);
       
-      // Remove DOM element and delegation
-      const el = this._getElement();
-      if (el) {
-        if (eventHandler) {
-          removeEventDelegation(el, eventHandler);
-          eventHandler = undefined;
-          delegationSetup = undefined;
-        }
+      // SAFETY FIX: Ensure it's an actual DOM Element before calling DOM methods
+      const el = typeof element === 'string' ? document.getElementById(element) : element;
+      if (el instanceof Element) {
         removeFromReactiveCache(el.getElementsByTagName("*"));
         el.replaceChildren();
         el.remove();
       }
       
-      // Clear reactive dependencies
-      if (isReactive && this.dependencyMap) {
-        this.dependencyMap.clear();
-        this.dependencyMap = undefined;
+      if (isReactive && instance.dependencyMap) {
+        instance.dependencyMap.clear();
+        instance.dependencyMap = undefined;
       }
       
-      // Nullify closure‑bound references
       entry.clear();
+      
+      // Optimized property cleanup: standard for-loop is faster than .forEach()
+      // Explicitly skip 'name' and 'isDestroyed' so they naturally remain intact
+      const keys = Object.getOwnPropertyNames(instance);
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        if (key !== 'name' && key !== 'isDestroyed') {
+          delete instance[key];
+        }
+      }
+      
+      // Nullify closure-bound references to guarantee garbage collection
       entry = undefined;
       state = undefined;
       element = undefined;
-      delegationSetup = false;
-      setFunc = undefined;
-      // ─────────────────────────────────────────────────────────────
-      // GUARANTEE: after destroy ONLY 'name' and 'isDestroyed' remain
-      // ─────────────────────────────────────────────────────────────
-      // Remove all own properties (enumerable + non‑enumerable, including getters)
-      Object.getOwnPropertyNames(this).forEach(key => delete this[key]);
-      
-      // Re‑establish the two required data properties
-      this.name = name; // plain value, no getter
-      this.isDestroyed = true; // plain value
-      isDestroyed = true; // keep closure flag synchronised
+      // setFunc is a const, but we can nullify the internal reference if needed, 
+      // though the closure itself will be GC'd when instance is GC'd.
     },
     
     reAttach(obj, index) {
       if (isDestroyed) return;
       const container = entry.get(index);
+      
       if (container) {
-        if (obj && !Array.isArray(obj)) {
+        if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
           state[index] = obj;
           const isTemplateFunc = typeof template === 'function';
           const frag = renderItem(
@@ -164,15 +155,15 @@ export default function Atom(activatorFunc) {
             index,
             template,
             isReactive,
-            this,
+            instance,
             name
           );
           container.appendChild(frag);
           addToReactiveCache(container);
         }
-      } else if (!this.isMounted) {
-        this.renderWith(obj ?? this.reserved);
-        this.reserved.length = 0;
+      } else if (!instance.isMounted) {
+        instance.renderWith(obj ?? instance.reserved);
+        instance.reserved.length = 0; // Fast array clear
       }
     },
     
@@ -196,7 +187,13 @@ export default function Atom(activatorFunc) {
       const totalLen = oldLen + dataArray.length;
       
       // Update state (append for reactive, replace for non‑reactive)
-      state = isReactive ? createSignal([...state, ...dataArray], this) : dataArray;
+      state = isReactive ? createSignal([...state, ...dataArray], instance) : dataArray;
+      
+      // Faster than optional chaining for one-time lifecycle hooks
+      if (typeof instance.created === 'function') {
+        instance.created(state);
+        instance.created = undefined;
+      }
       
       return new Promise((resolve, reject) => {
         const isTemplateFunc = typeof template === 'function';
@@ -220,13 +217,13 @@ export default function Atom(activatorFunc) {
               i,
               template,
               isReactive,
-              this,
+              instance,
               name
             );
             
             const wrapper = document.createElement('div');
-            wrapper.style.cssText =
-              'all: initial !important; display: block !important; color: inherit !important; font: inherit !important;';
+            // Use pre-allocated constant to avoid per-item string allocation/parsing
+            wrapper.style.cssText = WRAPPER_STYLE;
             wrapper.appendChild(frag);
             masterFragment.appendChild(wrapper);
             entry.set(i, wrapper);
@@ -237,7 +234,7 @@ export default function Atom(activatorFunc) {
           if (currentIndex < totalLen) {
             pendingRafId = requestAnimationFrame(processBatch);
           } else {
-            pendingRafId = null;
+            pendingRafId = undefined;
             try {
               if (position === 'append') {
                 el.appendChild(masterFragment);
@@ -245,11 +242,7 @@ export default function Atom(activatorFunc) {
                 el.prepend(masterFragment);
               }
               addToReactiveCache(el);
-              if (!delegationSetup) {
-                eventHandler = setupEventDelegation(el, this);
-                delegationSetup = true;
-              }
-              this.isMounted = true;
+              instance.isMounted = true;
               resolve();
             } catch (err) {
               console.error('Valen render error:', err);
@@ -265,24 +258,30 @@ export default function Atom(activatorFunc) {
     set: setFunc
   };
   
-  // ─── Define properties (getters/setters) ──────────────────────────
+  // ─── Define properties (optimized for V8 hidden-class) ────────────
   Object.defineProperties(instance, {
     element: { get: () => element, configurable: true },
-    name: { get: () => name, configurable: true },
+    name: { value: name, writable: false, configurable: true },
     state: {
       get: () => state,
       set: (newState) => {
-        Object.assign(state, newState);
+        if (isDestroyed) return;
+        if (newState && typeof newState === 'object') {
+          Object.assign(state, newState);
+        }
         return true;
       },
       configurable: true
     },
-    template: { get: () => template, configurable: true },
-    useStrict: { get: () => true, configurable: true },
+    template: { value: template, writable: false, configurable: true },
+    useStrict: { value: true, writable: false, configurable: true },
     entry: { get: () => entry, configurable: true },
-  //  currentExecIndex: { get: () => currentExecIndex, configurable: true },
-    isReactive: { get: () => isReactive, configurable: true },
-    type: { get: () => 'Atom', configurable: true }
+    isReactive: { value: isReactive, writable: false, configurable: true },
+    type: { value: 'Atom', writable: false, configurable: true },
+    isDestroyed: {
+      get: () => isDestroyed,
+      configurable: true
+    }
   });
   
   // ─── Initialise stylesheet and register ───────────────────────────

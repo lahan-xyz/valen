@@ -98,6 +98,36 @@ export function removeFromReactiveCache(nodeList) {
   }
 }
 
+
+const camelReg = /([A-Z])+/g;
+// Build KNOWN_STYLE_PROPS in one pass – no intermediate array, no `undefined` teardown
+const SVG_SPECIFIC = new Set([
+  'alignmentBaseline', 'baselineShift', 'bufferedRendering', 'colorInterpolation',
+  'colorInterpolationFilters', 'colorRendering', 'cx', 'cy', 'd', 'dominantBaseline',
+  'fill', 'fillOpacity', 'fillRule', 'floodColor', 'floodOpacity', 'lightingColor',
+  'marker', 'markerEnd', 'markerMid', 'markerStart', 'maskType', 'paintOrder',
+  'r', 'rx', 'ry', 'shapeRendering', 'stopColor', 'stopOpacity', 'stroke',
+  'strokeDasharray', 'strokeDashoffset', 'strokeLinecap', 'strokeLinejoin',
+  'strokeMiterlimit', 'strokeOpacity', 'strokeWidth', 'textAnchor', 'textRendering',
+  'vectorEffect', 'x', 'y',
+]);
+
+export const KNOWN_STYLE_PROPS = new Map();
+
+{
+  const keys = Object.keys(sharedTemplate.style);
+  for (let i = 0, len = keys.length; i < len; i++) {
+    const k = keys[i];
+    
+    if (!SVG_SPECIFIC.has(k)) {
+      const key = k.replace(camelReg, (e) => e.toLowerCase());
+      const val = k.replace(camelReg, (e) => `-${e.toLowerCase()}`);
+      KNOWN_STYLE_PROPS.set(key, val);
+    }
+  }
+}
+
+
 // --- 2. THE MUTABLE CONTEXT WRAPPER ---
 // For primitives and variables that get completely overwritten/reassigned
 export const ctx = {

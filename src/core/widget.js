@@ -1,6 +1,9 @@
-import { widgets } from '../internal.js'
+import { widgets } from '../internal.js';
 import { renderWidget } from '../parser/utils.js';
 import { initiateStyleSheet } from '../dom/utils.js';
+
+// Shared frozen empty object to prevent allocating a new {} on every widget render
+const EMPTY_PROPS = Object.freeze({});
 
 /**
  * Valen Widget Higher-Order Function
@@ -22,9 +25,13 @@ export default function Widget(WidgetFunc) {
   let cssInjected = false;
   
   // The Execution Function
-  function func(props = {}, children = "") {
+  // Removed default parameter {} to avoid per-call memory allocation
+  function func(props, children) {
+    const safeProps = props == null ? EMPTY_PROPS : props;
+    const safeChildren = children == null ? "" : children;
+    
     // Generate the raw component object
-    const instance = WidgetFunc(props);
+    const instance = WidgetFunc(safeProps);
     
     // 3. INSTANCE SAFETY: Ensure the widget actually returned a valid object
     if (!instance || typeof instance !== "object" || Array.isArray(instance)) {
@@ -33,22 +40,27 @@ export default function Widget(WidgetFunc) {
     
     instance.className = widgetName;
     
-    // 4. MICRO-OPTIMIZATION: Short-circuiting order
-    if (!cssInjected && instance.stylesheet) {
-      initiateStyleSheet(`.${widgetName}`, instance, true);
-      cssInjected = true;
+    // 4. OPTIMIZATION: Only interact with stylesheet property if it exists
+    if (instance.stylesheet) {
+      if (!cssInjected) {
+        initiateStyleSheet(`.${widgetName}`, instance, true);
+        cssInjected = true;
+      }
+      // 5. MEMORY/V8 OPTIMIZATION: Clean up reference after first use
+      instance.stylesheet = undefined;
     }
     
-    // 5. MEMORY/V8 OPTIMIZATION: undefined over null
-    instance.stylesheet = undefined;
-    
     // Pass only what is necessary to the renderer
-    return renderWidget(instance, props, children);
-  };
+    return renderWidget(instance, safeProps, safeChildren);
+  }
   
+  // 6. PERFORMANCE: Use 'value' instead of getter for static properties 
+  // (enables better JavaScript engine hidden-class optimization)
   Object.defineProperty(func, "type", {
-    get: () => "Widget"
-  })
+    value: "Widget",
+    writable: false,
+    configurable: true
+  });
   
   // Register globally for template interpolation
   widgets.set(widgetName, func);

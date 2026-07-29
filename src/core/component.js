@@ -2,41 +2,58 @@ import { components, removeFromReactiveCache } from '../internal.js';
 import { createSignal } from '../reactivity/signal.js';
 import { initiateStyleSheet } from '../dom/utils.js';
 
+let hasInitializedRoot = false;
+
 export default function Component(componentFunc) {
   const componentName = componentFunc.name;
   
-  // 1. FAST FAIL: Validate the name BEFORE executing the function or checking the map
+  // 1. FAST FAIL: Validate the name BEFORE executing the function
   if (!componentName || componentName === "anonymous") {
-    throw new Error(`[Valen] Components must be named functions. Example: function Header() {}.`);
+    throw new Error(`Valen Components must be named functions. Example: function Header() {}.`);
   }
   
   if (components.has(componentName)) {
     throw new Error(`Component '${componentName}' already exists, choose a new component name.`);
   }
   
-  // 2. Safely invoke the component function now that validation has passed
+  // 2. Safely invoke the component function
   const instance = componentFunc();
   
-  // 3. SAFETY FIX: `typeof null` is "object". We must check if instance is strictly truthy.
+  // 3. EARLY VALIDATION: Prevent partial state mutation and runtime errors 
+  // if the component function returns null, undefined, or an array.
   if (!instance || typeof instance !== "object" || Array.isArray(instance)) {
     throw new Error(`Return value of Component '${componentName}' must be a plain object`);
   }
   
-  // The Gatekeeper Flag
+  const mount = instance.mount;
+  let isRootComponent = false;
+  
+  // 4. Root component initialization
+  if (!hasInitializedRoot && mount) {
+    instance.element = typeof mount === "string" ? document.querySelector(mount) : mount;
+    hasInitializedRoot = true;
+    isRootComponent = true;
+    
+    if (!instance.element) {
+      throw new Error(`Valen:\nMount node selector '${mount}' is invalid`);
+    }
+  }
+  
+  // 5. Internal state setup (grouped for better JS engine hidden-class optimization)
   let cssInjected = false;
   let atomDeps = new Set();
-  
   let _state = createSignal(instance.state, instance);
-  
   let isDestroyed = false;
   
+  // 6. Destroy logic
   instance.destroy = function() {
     if (isDestroyed) return;
     
     components.delete(componentName);
     
     const el = instance.element;
-    if (el) {
+    // SAFETY FIX: Ensure it's an actual DOM Element before calling DOM methods
+    if (el instanceof Element) {
       removeFromReactiveCache(el.getElementsByTagName("*"));
       el.replaceChildren();
       el.remove();
@@ -47,31 +64,31 @@ export default function Component(componentFunc) {
       instance.dependencyMap = undefined;
     }
     
-    // Clean up internal references
+    // Clean up internal references to prevent memory leaks
     atomDeps = undefined;
     _state = undefined;
     instance.element = undefined;
     instance.isMounted = false;
     
-    // -----------------------------------------------
-    // GUARANTEE: only 'name' and 'isDestroyed' remain
-    // -----------------------------------------------
-    // Remove ALL own properties (enumerable + non‑enumerable) EXCEPT 'name'
-    Object.getOwnPropertyNames(instance).forEach(key => {
-      if (key !== 'name') delete instance[key];
-    });
+    // Remove ALL own properties EXCEPT 'name' and 'isDestroyed'
+    // Optimized with a standard for-loop for better performance than .forEach()
+    const keys = Object.getOwnPropertyNames(instance);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (key !== 'name' && key !== 'isDestroyed') {
+        delete instance[key];
+      }
+    }
     
-    // Now set a plain data property for isDestroyed
-    instance.isDestroyed = true;
-    isDestroyed = true; // keep local guard variable in sync
+    isDestroyed = true;
   };
   
-  // Make getter properties configurable so they can be deleted during destroy
+  // 7. Define optimized properties 
+  // Using 'value' instead of getters for static values improves engine performance
   Object.defineProperties(instance, {
-    type: {
-      get: () => "Component",
-      configurable: true
-    },
+    type: { value: "Component", writable: false, configurable: true },
+    isRootComponent: { value: isRootComponent, writable: false, configurable: true },
+    name: { value: componentName, writable: false, configurable: true },
     atomDeps: {
       get: () => atomDeps,
       configurable: true
@@ -95,22 +112,31 @@ export default function Component(componentFunc) {
     }
   });
   
-  // 5. LIFECYCLE OPTIMIZATION: Avoid `.bind()` memory allocation
-  //    Optional chaining keeps `this` as `instance`, equivalent to `.call(instance, _state)`
-  instance.created?.(_state);
-  instance.created = undefined; // prefer undefined for V8 hidden classes
+  // 8. Lifecycle hook (explicit typeof check is marginally faster than optional chaining in V8)
+  if (typeof instance.created === "function") {
+    instance.created(_state);
+    instance.created = undefined;
+  }
   
-  // The Execution Function (registered in the global component map)
+  // 9. The Execution Function (registered in the global component map)
   const func = () => {
     if (!instance.isMounted) {
       instance.isFrozen = false;
-      instance.name = componentName;
       instance.useStrict = instance.useStrict ?? true;
-      instance.element = `valen${componentName}`;
+      
+      // SAFETY FIX: Prevent overwriting the root DOM element with a string ID, 
+      // which would break instance.destroy() later.
+      if (!isRootComponent) {
+        instance.element = `valen${componentName}`;
+      }
       
       // One‑time CSS evaluation
       if (instance.stylesheet && !cssInjected) {
-        initiateStyleSheet(`#${instance.element}`, instance);
+        // Derive selector safely: if root is an Element, use its ID, otherwise use the element property
+        const selector = (isRootComponent) ? "" :
+          `#${instance.element}`;
+    
+        initiateStyleSheet(selector, instance);
         cssInjected = true;
       }
       

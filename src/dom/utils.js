@@ -1,4 +1,4 @@
-import { ctx, stylesheet, LRUCache, sharedTemplate, stringBetween, reactiveCache, removeFromReactiveCache, GLOBAL_STATE, components } from '../internal.js'
+import { ctx, stylesheet, LRUCache, sharedTemplate, stringBetween, reactiveCache, removeFromReactiveCache, GLOBAL_STATE, components, KNOWN_STYLE_PROPS } from '../internal.js'
 import { initiateComponents, evaluateTemplate } from '../parser/utils.js';
 
 
@@ -19,46 +19,66 @@ const selectElement = valen_id => {
   return reactiveCache.get(valen_id);
 };
 
-function update(child, key, evaluated) {
-  switch (key) {
-    case 'v:exist':
-      if (evaluated === "false" || evaluated === false) {
-        const descendants = child.getElementsByTagName('*');
-        const nodesToClean = new Array(descendants.length + 1);
-        nodesToClean[0] = child;
-        for (let i = 0, len = descendants.length; i < len; i++) {
-          nodesToClean[i + 1] = descendants[i];
-        }
-        removeEvents(nodesToClean, true);
+
+const _styleKeyCache = new Map(); // "style.color" → "color"
+
+// ─── update ──────────────────────────────────────────────────────────────────
+
+function update(child, key, evaluated, isAttribute) {
+  
+  // ── v:exist ────────────────────────────────────────────────────────────
+  if (key === 'v:exist') {
+    if (evaluated === false || evaluated === 'false') {
+      const descendants = child.getElementsByTagName('*');
+      const count = descendants.length; // single read on live HTMLCollection
+      const nodesToClean = new Array(count + 1);
+      nodesToClean[0] = child;
+      for (let i = 0; i < count; i++) {
+        nodesToClean[i + 1] = descendants[i];
       }
-      break;
-      
-    case 'disabled': {
-      const isDisabled = evaluated !== "false" && evaluated !== false;
-      if (child.disabled !== isDisabled) {
-        child.disabled = isDisabled;
-      }
-      break;
+      removeEvents(nodesToClean, true);
+    }
+    return;
+  }
+  
+  // ── disabled ───────────────────────────────────────────────────────────
+  if (key === 'disabled') {
+    const isDisabled = evaluated !== false && evaluated !== 'false';
+    if (child.disabled !== isDisabled) {
+      child.disabled = isDisabled;
+    }
+    return;
+  }
+  
+  // ── style.* ────────────────────────────────────────────────────────────
+  if (key[0] === 's' && key.startsWith('style.')) {
+    let prop = _styleKeyCache.get(key);
+    if (prop === undefined) {
+      prop = key.slice(6);
+      _styleKeyCache.set(key, prop);
+    }
+    const style = child.style; // cache CSSStyleDeclaration getter
+    if (style[prop] !== evaluated) {
+      style[prop] = evaluated;
+    }
+    return;
+  }
+  
+  if (isAttribute && child.getAttribute(key) != evaluated) {
+    
+    if (evaluated != "false" && evaluated != "") {
+      child.setAttribute(key, evaluated);
+    } else {
+      child.removeAttribute(key);
     }
     
-    default:
-      // Ultra-fast string check: 115 is the charCode for 's'
-      if (key.charCodeAt(0) === 115 && key.startsWith("style.")) {
-        const sliced = key.slice(6);
-        if (child.style[sliced] !== evaluated) {
-          child.style[sliced] = evaluated;
-        }
-      } else {
-        if (key in child) {
-          if (child[key] != evaluated) {
-            child[key] = evaluated;
-          }
-        } else {
-          if (child.getAttribute(key) != evaluated) {
-            child.setAttribute(key, evaluated);
-          }
-        }
-      }
+    return;
+  }
+  
+  if (key in child) {
+    if (child[key] != evaluated) { // loose != : intentional ("5" == 5)
+      child[key] = evaluated;
+    }
   }
 }
 
@@ -72,13 +92,15 @@ function scheduleFlush() {
 
 let updateMap = new Map();
 
-function batchedUpdate(child, key, evaluated) {
+function batchedUpdate(child, key, evaluated, isAttribute) {
   let entry = updateMap.get(child);
   if (!entry) {
     entry = {};
     updateMap.set(child, entry);
   }
   entry[key] = evaluated;
+  entry.isAttribute = isAttribute;
+  
   scheduleFlush();
 }
 
@@ -90,7 +112,7 @@ function flushUpdates() {
   for (const [child, mutations] of batch) {
     if (child?.isConnected) {
       for (const key in mutations) {
-        update(child, key, mutations[key]);
+        update(child, key, mutations[key], mutations.isAttribute);
       }
     }
   }
@@ -100,15 +122,20 @@ function flushUpdates() {
 function updateComponent(changedKey, instance) {
   const dependencyMap = !instance ? GLOBAL_STATE.dependencyMap : instance.dependencyMap;
   const subscribers = dependencyMap.get(changedKey);
-
+  
   if (!subscribers) return;
   
   for (const subscriber of subscribers) {
-    const { template, key: targetProp, valen_id: elementId, once } = subscriber;
+    const template = subscriber.template;
+    const targetProp = subscriber.key;
+    const elementId = subscriber.valen_id;
+    const once = subscriber.once;
+    const isAttribute = subscriber.isAttribute;
+    
     const node = selectElement(elementId);
     if (node && node.isConnected) {
       const evaluated = evaluateTemplate(template, instance);
-      batchedUpdate(node, targetProp, evaluated);
+      batchedUpdate(node, targetProp, evaluated, isAttribute);
       if (once) subscribers.delete(subscriber);
     } else {
       subscribers.delete(subscriber);
@@ -150,6 +177,7 @@ function initiateStyleSheet(selector = "", instance = {}, shouldSwitch) {
   if (!instance.stylesheet) return;
   let styles = objToStyle(selector, instance.stylesheet, "", shouldSwitch);
   if (!stylesheet.isAppended) {
+    stylesheet.el.type = "text/css";
     document.head.appendChild(stylesheet.el);
     stylesheet.isAppended = true;
   }
@@ -209,6 +237,8 @@ function convertDirective(attr, value, child) {
 }
 
 
+// ─── Static lookup tables (module-init, runs once) ───────────────────────────
+
 const ATTR_TO_PROP = {
   for: 'htmlFor',
   tabindex: 'tabIndex',
@@ -216,139 +246,166 @@ const ATTR_TO_PROP = {
   maxlength: 'maxLength',
   accesskey: 'accessKey',
   colspan: 'colSpan',
-  rowspan: 'rowSpan'
+  rowspan: 'rowSpan',
 };
 
 const CONTENT_DIRECTIVES = new Set(['v:text', 'v:html', 'v:once:text', 'v:once:html']);
 
 
-const KNOWN_STYLE_PROPS = new Set([
-  'color', 'background', 'background-color', 'border', 'border-color', 'border-width',
-  'border-radius', 'margin', 'margin-top', 'margin-bottom', 'margin-left', 'margin-right',
-  'padding', 'padding-top', 'padding-bottom', 'padding-left', 'padding-right',
-  'width', 'height', 'min-width', 'max-width', 'min-height', 'max-height',
-  'display', 'visibility', 'opacity', 'overflow', 'overflow-x', 'overflow-y',
-  'position', 'top', 'left', 'right', 'bottom', 'z-index',
-  'flex-direction', 'flex-wrap', 'flex', 'flex-grow', 'flex-shrink', 'flex-basis',
-  'justify-content', 'align-items', 'align-self', 'align-content', 'gap', 'order',
-  'grid-template-columns', 'grid-template-rows', 'grid-column', 'grid-row',
-  'font-size', 'font-weight', 'font-family', 'font-style', 'line-height', 'letter-spacing',
-  'text-align', 'text-decoration', 'text-transform', 'white-space', 'word-break',
-  'transform', 'transition', 'animation', 'cursor', 'pointer-events',
-  'box-shadow', 'outline', 'float', 'clear', 'list-style', 'content',
-  'object-fit', 'object-position', 'resize', 'user-select', 'appearance',
-]);
+// ─── V8 hidden-class shape template ─────────────────────────────────────────
+// Allocate once so every entry object shares the same hidden class (map).
+// V8 will transition all objects created with this exact key order into
+// the same map, avoiding megamorphic property lookups in the update loop.
+function createEntry(template, key, valen_id, once, isAttribute) {
+  return { template, key, valen_id, once, isAttribute };
+}
 
+
+// ─── Hot path ────────────────────────────────────────────────────────────────
 
 function generateDataVA(child, isParent, instance) {
-  if (child instanceof SVGElement) return [];
-  
-  const arr = [];
+  const isSVG = child instanceof SVGElement;
   const attributes = getAttributes(child);
-  const { name, type, useStrict } = instance;
   
-  // Defer DOM read until a template actually requires it
-  let VAID = null;
-  let hasCheckedVAID = false;
+  // Hoist instance properties once to avoid repeated lookups
+  const name = instance.name;
+  const useStrict = instance.useStrict;
+  const isRootComponent = instance.isRootComponent;
+  const isComponent = instance.type === 'Component';
   
-  if (!isParent) {
-    let hasExplicitContentDirective = false;
-    const len = attributes.length; // Cache length for micro-optimization
-    
-    for (let i = 0; i < len; i++) {
+  const hasSyn = child.hasAttribute("v:syn");
+  
+  // ── 1. Inject implicit content directive (only for non-parent nodes) ──
+  if (!isParent && !hasSyn) {
+    let hasContent = false;
+    for (let i = 0, len = attributes.length; i < len; i++) {
       if (CONTENT_DIRECTIVES.has(attributes[i].attribute)) {
-        hasExplicitContentDirective = true;
+        hasContent = true;
         break;
       }
     }
-    
-    if (!hasExplicitContentDirective) {
-      const contentKey = useStrict ? 'textContent' : 'innerHTML';
-      attributes.push({ attribute: contentKey, value: child[contentKey] });
+    if (!hasContent) {
+      const key = useStrict ? 'textContent' : 'innerHTML';
+      attributes.push({ attribute: key, value: child[key] });
     }
   }
   
-  const childStyle = child.style;
-  const attrLen = attributes.length;
+  // OPTIMIZATION: Hoist component ID tagging completely out of the attribute loop.
+  // This avoids checking `attribute === 'id'` on every single iteration.
+  if (isComponent && child.hasAttribute('id')) {
+    child.setAttribute('data-__v_cname__', name);
+  }
   
-  for (let i = 0; i < attrLen; i++) {
-    let { attribute, value } = attributes[i];
-    value = value || '';
+  // ── 2. Main attribute loop ──
+  const arr = [];
+  const childStyle = child.style; // cache the CSSStyleDeclaration
+  let VAID = null;
+  let vaChecked = false;
+  
+  for (let i = 0, len = attributes.length; i < len; i++) {
+    const attr = attributes[i];
+    let attribute = attr.attribute;
+    let value = attr.value ?? ''; // ?? preserves 0 / false
     
-    if (attribute === 'class') attribute = 'className';
-    
-    if (type === 'Component' && attribute === 'id') {
-      child.setAttribute("data-__v_cname__", name);
+    if (hasSyn && attribute === "v:syn") {
+      if (isRootComponent) child.removeAttribute("v:syn");
+      continue;
     }
     
-    // Fast char code checks for string prefixes
-    const firstChar = attribute.charCodeAt(0);
+    // class → className (skip for SVG where "class" is the correct attr)
+    if (attribute === 'class' && !isSVG) attribute = 'className';
     
-    // 111 is 'o', 110 is 'n'
-    if (firstChar === 111 && attribute.charCodeAt(1) === 110) {
-      throw Error(`Valen\n:Event names must start with '@'.\nRefer to '${child.outerHTML}'.`);
+    // ── Fast prefix dispatch via char codes ──
+    const c0 = attribute.charCodeAt(0);
+    
+    // "on…" → illegal event syntax
+    if (c0 === 111 /* o */ && attribute.charCodeAt(1) === 110 /* n */ ) {
+      // SAFETY FIX: Avoid child.outerHTML which triggers massive DOM serialization 
+      // and can cause severe GC spikes/frame drops when an error is thrown.
+      throw new Error(
+        `Valen:\nEvent names must start with '@'.\nRefer to element: <${child.tagName.toLowerCase()}>.`
+      );
     }
     
-    // 64 is '@'
-    if (firstChar === 64) {
-      // Use the existing `value` instead of a slow child.getAttribute() DOM read
+    // "@…" → event binding
+    if (c0 === 64 /* @ */ ) {
       if (value) {
-        child.setAttribute("data-v-on", attribute.slice(1));
-        child.setAttribute("data-v-exp", value.trim());
+        child.setAttribute('data-v-on', attribute.slice(1));
+        child.setAttribute('data-v-exp', value.trim());
       }
       child.removeAttribute(attribute);
       continue;
     }
     
-    let once = false;
-    [attribute, value, once] = convertDirective(attribute, value, child);
+    // ── Directive conversion ──
+    // OPTIMIZATION: Avoid array destructuring overhead in hot path. 
+    // Direct index access is measurably faster than the iterator protocol.
+    const conv = convertDirective(attribute, value, child);
+    attribute = conv[0];
+    value = conv[1];
+    const once = conv[2];
     
-    const hasTemplate = value.indexOf('[') !== -1 && value.indexOf(']') !== -1;
+    // ── Template detection (single scan) ──
+    const hasTemplate = value.includes('[') && value.includes(']');
     
-    // Optimized boolean logic: group the `!== 'src'` check
-    const isStyle = attribute !== 'src' && (KNOWN_STYLE_PROPS.has(attribute) || attribute in childStyle);
+    // ── Resolve the mapped property name once ──
+    const prop = ATTR_TO_PROP[attribute] ?? attribute;
     
-    // Consolidate duplicated assignment logic
+    // ── Style vs attribute/property ──
+    const style = KNOWN_STYLE_PROPS.get(prop);
+    
     const finalValue = hasTemplate ? evaluateTemplate(value, instance) : value;
     
-    if (isStyle) {
-      childStyle[attribute] = finalValue;
+    // Moved inside loop to avoid manual resetting
+    let isAttribute = false;
+    
+    if (style) {
+      childStyle[style] = finalValue;
       child.removeAttribute(attribute);
+    } else if (isSVG) {
+      child.setAttribute(prop, finalValue);
+    } else if (child.hasAttribute(prop)) {
+      isAttribute = true;
+      // OPTIMIZATION: Use strict inequality (!==) to avoid type coercion overhead
+      if (finalValue !== "false") {
+        child.setAttribute(prop, finalValue);
+      } else {
+        child.removeAttribute(prop);
+      }
     } else {
-      child[ATTR_TO_PROP[attribute] || attribute] = finalValue;
+      child[prop] = finalValue;
     }
     
     if (!hasTemplate) continue;
     
-    // Lazy evaluation: Only touch the DOM for VAID if a template is actually found
-    if (!hasCheckedVAID) {
-      VAID = child.getAttribute("data-valen_id");
-      hasCheckedVAID = true;
+    // ── Lazy VAID: only touch the DOM when a template actually exists ──
+    if (!vaChecked) {
+      VAID = child.getAttribute('data-valen_id');
+      vaChecked = true;
     }
-    
     if (!VAID) {
-      VAID = `va${ctx.counterVA++}`;
+      // OPTIMIZATION: String concatenation is marginally faster than template literals
+      VAID = 'va' + ctx.counterVA++;
       child.setAttribute('data-valen_id', VAID);
     }
     
+    // ── Build entry (shared hidden class via createEntry) ──
     const expression = b(value).trim();
-    const isGlobal = expression.charCodeAt(0) === 36; // 36 is '$'
+    const entry = createEntry(
+      value,
+      style ? 'style.' + attribute : attribute, // String concatenation
+      VAID,
+      once,
+      isAttribute
+    );
     
-    const entryObj = {
-      template: value,
-      key: isStyle ? `style.${attribute}` : attribute,
-      valen_id: VAID,
-      isGlobal,
-      once
-    };
-    
-    if (isGlobal) {
-      GLOBAL_STATE.dataVA.push(entryObj);
+    // 36 = '$' → global state
+    if (expression.charCodeAt(0) === 36) {
+      GLOBAL_STATE.dataVA.push(entry);
     } else {
-      arr.push(entryObj);
+      arr.push(entry);
     }
   }
-  
   return arr;
 }
 
@@ -452,7 +509,7 @@ function processComponentMarkup(jsx, instance, subId) {
     }
     
     buildDependencyMap(instance, data);
-
+    
     return fragment;
     
   } catch (error) {
@@ -536,7 +593,7 @@ function _makeContainerHandler(instance) {
   return function delegatedHandler(e) {
     const target = e.target;
     const bindings = nodeBindings.get(target)
-    if (bindings.vOn !== e.type) return;
+    if (bindings?.vOn !== e.type) return;
     
     const expression = bindings.vExpr;
     
@@ -602,7 +659,7 @@ const renderComponent = (instance, name, flag, toFrag) => {
   const innerTemplate = typeof instance.template === 'function' ?
     instance.template(instance.state) :
     instance.template;
-    
+  
   // 3. Clean string assignment
   let template = flag ?
     innerTemplate :
