@@ -98,18 +98,25 @@ export function removeFromReactiveCache(nodeList) {
   }
 }
 
+export const INPUT_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT", "BUTTON"]);
 
 const camelReg = /([A-Z])+/g;
-// Build KNOWN_STYLE_PROPS in one pass – no intermediate array, no `undefined` teardown
-const SVG_SPECIFIC = new Set([
+// Build KNOWN_STYLE_PROPS in one pass
+export const SVG_SPECIFIC = new Set([
   'alignmentBaseline', 'baselineShift', 'bufferedRendering', 'colorInterpolation',
   'colorInterpolationFilters', 'colorRendering', 'cx', 'cy', 'd', 'dominantBaseline',
   'fill', 'fillOpacity', 'fillRule', 'floodColor', 'floodOpacity', 'lightingColor',
-  'marker', 'markerEnd', 'markerMid', 'markerStart', 'maskType', 'paintOrder',
+  'marker', 'markerEnd', 'markerMid', 'markerStart', 'maskType', 'paintOrder', 'points',
   'r', 'rx', 'ry', 'shapeRendering', 'stopColor', 'stopOpacity', 'stroke',
   'strokeDasharray', 'strokeDashoffset', 'strokeLinecap', 'strokeLinejoin',
   'strokeMiterlimit', 'strokeOpacity', 'strokeWidth', 'textAnchor', 'textRendering',
-  'vectorEffect', 'x', 'y',
+  'vectorEffect', 'x', 'y', 'x1', 'y1', 'x2', 'y2'
+]);
+
+const NORMALIZED_EVENTS = new Set([
+  'pointerdown', 'pointerup', 'pointermove',
+  'pointerover', 'pointerout',
+  'click', 'input', 'submit', 'change', 'keydown'
 ]);
 
 export const KNOWN_STYLE_PROPS = new Map();
@@ -125,6 +132,7 @@ export const KNOWN_STYLE_PROPS = new Map();
       KNOWN_STYLE_PROPS.set(key, val);
     }
   }
+  
 }
 
 
@@ -132,6 +140,7 @@ export const KNOWN_STYLE_PROPS = new Map();
 // For primitives and variables that get completely overwritten/reassigned
 export const ctx = {
   counterVA: 0,
+  evtCounter: 0,
   routerObj: {},
   currentComponent: null,
   navigateFunc: () => {},

@@ -61,7 +61,7 @@ const Store = (name, val, shouldStore) => {
   }
   
   const obj = typeof val === "object" ? val : { value: val };
-  
+ 
   // Batching helpers for localStorage writes
   let localStorageDirty = false;
   const persist = () => {
@@ -90,7 +90,7 @@ const Store = (name, val, shouldStore) => {
       set(target, key, value) {
         if (target[key] !== value) {
           target[key] = value;
-          // Trigger DOM update (already batched via batchedUpdate)
+          // Trigger DOM update
           updateComponent(key, null);
           
           // Mark localStorage as dirty; write will happen once per microtask
@@ -107,7 +107,6 @@ const Store = (name, val, shouldStore) => {
   };
   
   globalThis[name] = reactiveObj(obj);
-  
   return globalThis[name];
 };
 

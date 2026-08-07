@@ -36,8 +36,7 @@ export default function render(component) {
   
   for (const component of components) {
     const instance = component[1];
-    if (instance.type === "Atom") continue;
-    
+    if (instance.type === "Atom" || typeof instance === "function") continue;
     if (instance.element) {
       strToEl(instance);
     }

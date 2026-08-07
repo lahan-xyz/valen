@@ -102,11 +102,11 @@ function AppView() {
       <header class="app-header">
         <h1 class="app-title">JAMB Past Questions</h1>
         <div class="app-controls">
-          <select aria-label="Select Subject" class="app-select" v:value=[ currentSubject ] @change=[ this.changeSubject(value); ]>
+          <select aria-label="Select Subject" class="app-select" value=[ currentSubject ] @change=[ this.changeSubject(value); ]>
             ${SUBJECTS.map(sub => `<option value="${sub}" ${ sub === state.currentSubject ? 'selected="true"' : '' }>${sub}</option>`).join('')}
           </select>
           <select aria-label="Select Year" class="app-select"
-            v:value=[ currentYear ]
+            value=[ currentYear ]
             @change=[ this.changeYear(value); ]>
             ${YEARS.map(year => `<option value="${year}"  ${ year == state.currentYear ? 'selected="true"' : '' }>${year}</option>`).join('')}
           </select>

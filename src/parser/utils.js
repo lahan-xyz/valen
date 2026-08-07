@@ -107,7 +107,7 @@ function lexTemplate(templateString) {
   
   // Local var for string to avoid repeated property access
   const str = templateString;
-
+  
   for (let i = 0; i < len; i++) {
     const code = str.charCodeAt(i);
     
@@ -136,9 +136,9 @@ function lexTemplate(templateString) {
     // --- NATIVE EVENT SKIPPING (depth === 0, quotes only) ---
     if (depth === 0 && (code === C_QUOTE_D || code === C_QUOTE_S)) {
       // Fast path: check attr name starts with 'on'
-      if (currentAttrName.length >= 2 && 
-          currentAttrName.charCodeAt(0) === 111 && // 'o'
-          currentAttrName.charCodeAt(1) === 110) { // 'n'
+      if (currentAttrName.length >= 2 &&
+        currentAttrName.charCodeAt(0) === 111 && // 'o'
+        currentAttrName.charCodeAt(1) === 110) { // 'n'
         let closingIdx = i + 1;
         // Unroll first check for speed
         while (closingIdx < len) {
@@ -174,12 +174,6 @@ function lexTemplate(templateString) {
     // --- STRUCTURAL BRACKET TRACKING ---
     if (!inQuote) {
       if (code === C_BRACKET_O) {
-        const prevCode = i > 0 ? str.charCodeAt(i - 1) : 0;
-        // Skip static CSS framework classes [- or :[
-        if (depth === 0 && (prevCode === C_HYPHEN || prevCode === C_COLON)) {
-          continue;
-        }
-
         if (depth === 0) {
           if (startIdx < i) {
             chunks.push({ isExpr: false, val: str.slice(startIdx, i) });
@@ -221,7 +215,7 @@ function evaluateTemplate(templateString, instance) {
   let added = '';
   let hasStateArg = true;
   
-  if (instance.type === 'Atom') {
+  if (instance?.type === 'Atom') {
     const idx = instance.executingIndex;
     let cacheKey = instance._destCache;
     
@@ -242,13 +236,13 @@ function evaluateTemplate(templateString, instance) {
     hasStateArg = false;
   }
   
-  let combinedHTML = '';
+  let combinedOutput = '';
   
   for (let i = 0; i < chunkLen; i++) {
     const chunk = chunks[i];
     
     if (!chunk.isExpr) {
-      combinedHTML += chunk.val;
+      combinedOutput += chunk.val;
       continue;
     }
     
@@ -282,7 +276,7 @@ function evaluateTemplate(templateString, instance) {
         evaluatorCache.set(cacheKey, evaluator);
       } catch (err) {
         console.warn(`Valen Syntax Error in \`${innerContent}\`\n`, err);
-        combinedHTML += `[${innerContent}]`;
+        combinedOutput += `[${innerContent}]`;
         continue;
       }
     }
@@ -293,16 +287,16 @@ function evaluateTemplate(templateString, instance) {
         (hasStateArg ? evaluator.call(instance, instance.state) : evaluator.call(instance));
       
       if (result != null && !Number.isNaN(result)) {
-        combinedHTML += result;
+        combinedOutput += result;
       }
     } catch (error) {
       console.warn(`Valen Execution Error in \`${innerContent}\`\n`, error);
-      combinedHTML += `[${innerContent}]`
+      combinedOutput += `[${innerContent}]`
     }
   }
   
   ctx.currentTemplate = '';
-  return combinedHTML;
+  return combinedOutput;
 }
 
 
@@ -468,7 +462,6 @@ function getValueFromPath(obj, path) {
 
 function renderTemplate(input, props, shouldSanitize) {
   const chunks = lexTemplate(input);
-  
   // Early return if there's nothing to interpolate
   if (!chunks.length || (chunks.length === 1 && !chunks[0].isExpr)) {
     return input;

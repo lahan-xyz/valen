@@ -1,4 +1,4 @@
-import { ctx, stylesheet, LRUCache, sharedTemplate, stringBetween, reactiveCache, removeFromReactiveCache, GLOBAL_STATE, components, KNOWN_STYLE_PROPS } from '../internal.js'
+import { ctx, stylesheet, LRUCache, sharedTemplate, stringBetween, reactiveCache, removeFromReactiveCache, GLOBAL_STATE, components, KNOWN_STYLE_PROPS, INPUT_TAGS, SVG_SPECIFIC } from '../internal.js'
 import { initiateComponents, evaluateTemplate } from '../parser/utils.js';
 
 
@@ -19,29 +19,29 @@ const selectElement = valen_id => {
   return reactiveCache.get(valen_id);
 };
 
-
+const _knownPropsCache = Object.create(null);
 const _styleKeyCache = new Map(); // "style.color" → "color"
-
-// ─── update ──────────────────────────────────────────────────────────────────
 
 function update(child, key, evaluated, isAttribute) {
   
-  // ── v:exist ────────────────────────────────────────────────────────────
+  // ── 1. v:exist (structural directive) ──────────────────────────────────
   if (key === 'v:exist') {
     if (evaluated === false || evaluated === 'false') {
       const descendants = child.getElementsByTagName('*');
-      const count = descendants.length; // single read on live HTMLCollection
+      const count = descendants.length;
       const nodesToClean = new Array(count + 1);
       nodesToClean[0] = child;
+      
       for (let i = 0; i < count; i++) {
         nodesToClean[i + 1] = descendants[i];
       }
-      removeEvents(nodesToClean, true);
+      removeFromReactiveCache(nodesToClean);
+      child.remove();
     }
     return;
   }
   
-  // ── disabled ───────────────────────────────────────────────────────────
+  // ── 2. disabled (high-frequency boolean property) ──────────────────────
   if (key === 'disabled') {
     const isDisabled = evaluated !== false && evaluated !== 'false';
     if (child.disabled !== isDisabled) {
@@ -50,33 +50,67 @@ function update(child, key, evaluated, isAttribute) {
     return;
   }
   
-  // ── style.* ────────────────────────────────────────────────────────────
-  if (key[0] === 's' && key.startsWith('style.')) {
-    let prop = _styleKeyCache.get(key);
-    if (prop === undefined) {
-      prop = key.slice(6);
-      _styleKeyCache.set(key, prop);
+  // ── 3. style.* (char-code fast-path) ───────────────────────────────────
+  if (key.length > 6 && key.charCodeAt(0) === 115 && key.charCodeAt(5) === 46) {
+    if (key.charCodeAt(1) === 116 && key.charCodeAt(2) === 121 &&
+      key.charCodeAt(3) === 108 && key.charCodeAt(4) === 101) {
+      
+      let prop = _styleKeyCache.get(key);
+      if (prop === undefined) {
+        prop = key.substring(6); // substring is historically slightly faster than slice
+        _styleKeyCache.set(key, prop);
+      }
+      
+      const style = child.style;
+      if (style[prop] !== evaluated) {
+        style[prop] = evaluated;
+      }
+      return;
     }
-    const style = child.style; // cache CSSStyleDeclaration getter
-    if (style[prop] !== evaluated) {
-      style[prop] = evaluated;
-    }
-    return;
   }
   
-  if (isAttribute && child.getAttribute(key) != evaluated) {
-    
-    if (evaluated != "false" && evaluated != "") {
+  // ── 4. SVG (attribute-only fast path) ──────────────────────────────────
+  if (SVG_SPECIFIC.has(key)) {
+    // HUGE FIX: Added equality diffing. 
+    // Unconditionally calling setAttribute() triggers expensive layout/paint 
+    // recalculations in the browser, even if the value hasn't changed.
+    if (child.getAttribute(key) != evaluated) {
       child.setAttribute(key, evaluated);
-    } else {
-      child.removeAttribute(key);
     }
-    
     return;
   }
   
-  if (key in child) {
-    if (child[key] != evaluated) { // loose != : intentional ("5" == 5)
+  // ── 5. Attribute mode ──────────────────────────────────────────────────
+  if (isAttribute && key !== "value") {
+    const current = child.getAttribute(key);
+    
+    if (current != evaluated) {
+      // OPTIMIZATION: Replaced loose inequality (!=) with strict equality (===)
+      // This entirely bypasses the JS engine's type-coercion overhead when
+      // `evaluated` is a boolean or number being checked against string rules.
+      if (evaluated === "false" || evaluated === "") {
+        if (current !== null) {
+          child.removeAttribute(key);
+        }
+      } else {
+        child.setAttribute(key, evaluated);
+      }
+    }
+    return;
+  }
+  
+  
+  // ── 6. Property mode ────────────────────────────────────────
+  let isProp = _knownPropsCache[key];
+  
+  if (isProp === undefined) {
+    // We only pay the prototype-walking penalty ONCE per unique key
+    isProp = key in child;
+    _knownPropsCache[key] = isProp;
+  }
+  
+  if (isProp === true) {
+    if (child[key] != evaluated) {
       child[key] = evaluated;
     }
   }
@@ -177,7 +211,6 @@ function initiateStyleSheet(selector = "", instance = {}, shouldSwitch) {
   if (!instance.stylesheet) return;
   let styles = objToStyle(selector, instance.stylesheet, "", shouldSwitch);
   if (!stylesheet.isAppended) {
-    stylesheet.el.type = "text/css";
     document.head.appendChild(stylesheet.el);
     stylesheet.isAppended = true;
   }
@@ -186,35 +219,41 @@ function initiateStyleSheet(selector = "", instance = {}, shouldSwitch) {
 }
 
 
-function getAttributes(el) {
-  return Array.from(el.attributes).map(({ nodeName, nodeValue }) => ({ attribute: nodeName, value: nodeValue }));
-}
-
-
-const qOnceMap = {
+// Prototypeless dictionary for faster property lookups
+const qOnceMap = Object.assign(Object.create(null), {
   text: "textContent",
   html: "innerHTML",
   class: "className"
-}
+});
 
 function convertDirective(attr, value, child) {
-  if (!attr.startsWith('v:')) return [attr, value, false];
+  if (attr.charCodeAt(0) !== 118 || attr.charCodeAt(1) !== 58 || attr === "v:syn" || attr === "v:exist") {
+    return [attr, value, false];
+  }
   
   child.removeAttribute(attr);
   
   if (attr.startsWith('v:once:')) {
-    let realAttr = attr.slice(7);
+    const realAttr = attr.substring(7);
     return [qOnceMap[realAttr] || realAttr, value, true];
+  }
+  
+  if (attr.startsWith('v:copy:')) {
+    const endIdx = attr.indexOf(':', 7);
+    const _var = endIdx === -1 ? attr.substring(7) : attr.substring(7, endIdx);
+    const val = "navigator.clipboard.writeText(" + _var + ").then(()=>{" + value + "}).catch(err=>console.error('Failed to copy text:\\n'+err))";
+    return ["@click", val, false];
   }
   
   switch (attr) {
     case 'v:show': {
-      if (value.includes('[') && value.includes(']')) {
+      if (value.indexOf('[') !== -1 && value.indexOf(']') !== -1) {
         const expr = b(value, true).trim();
-        const fExpr = expr ? `[${expr} ? 'block' : 'none']` : "none";
+        const fExpr = expr ? "[" + expr + " ? 'block' : 'none']" : "none";
         return ['display', fExpr, false];
       }
-      return ['display', (value === 'true' || value === true || value.length) ? 'block' : 'none', false];
+      const isVisible = (value === 'true' || value === true || value.length > 0);
+      return ['display', isVisible ? 'block' : 'none', false];
     }
     case 'v:text':
       child.textContent = value;
@@ -223,14 +262,11 @@ function convertDirective(attr, value, child) {
     case 'v:html':
       return ['innerHTML', value, false];
       
-    case 'v:value':
-      return ['value', value, false];
-      
     default:
       if (attr === 'v:once') {
-        console.warn(`Valen: 'v:once' must be followed by ':attribute' (e.g., v:once:id="...").`);
+        console.warn("Valen: 'v:once' must be followed by ':attribute' (e.g., v:once:id=\"...\").");
       } else {
-        console.warn(`Valen: unknown directive '${attr}'\n'${child.outerHTML}'`);
+        console.warn("Valen: unknown directive '" + attr + "'\n'" + child.outerHTML + "'");
       }
       return [attr, value, false];
   }
@@ -238,7 +274,6 @@ function convertDirective(attr, value, child) {
 
 
 // ─── Static lookup tables (module-init, runs once) ───────────────────────────
-
 const ATTR_TO_PROP = {
   for: 'htmlFor',
   tabindex: 'tabIndex',
@@ -251,122 +286,145 @@ const ATTR_TO_PROP = {
 
 const CONTENT_DIRECTIVES = new Set(['v:text', 'v:html', 'v:once:text', 'v:once:html']);
 
-
-// ─── V8 hidden-class shape template ─────────────────────────────────────────
-// Allocate once so every entry object shares the same hidden class (map).
-// V8 will transition all objects created with this exact key order into
-// the same map, avoiding megamorphic property lookups in the update loop.
 function createEntry(template, key, valen_id, once, isAttribute) {
   return { template, key, valen_id, once, isAttribute };
 }
 
+const eventsCache = new Map();
 
 // ─── Hot path ────────────────────────────────────────────────────────────────
-
 function generateDataVA(child, isParent, instance) {
   const isSVG = child instanceof SVGElement;
-  const attributes = getAttributes(child);
-  
-  // Hoist instance properties once to avoid repeated lookups
   const name = instance.name;
   const useStrict = instance.useStrict;
   const isRootComponent = instance.isRootComponent;
   const isComponent = instance.type === 'Component';
-  
   const hasSyn = child.hasAttribute("v:syn");
   
-  // ── 1. Inject implicit content directive (only for non-parent nodes) ──
+  // 1. FAST STATIC SNAPSHOT
+  // Replaces [...child.attributes] with flat pre-sized arrays.
+  // This completely stops the "live index shifting" bug while avoiding heavy GC.
+  const nativeAttrs = child.attributes;
+  let len = nativeAttrs.length;
+  const keys = new Array(len);
+  const vals = new Array(len);
+  
+  for (let i = 0; i < len; i++) {
+    keys[i] = nativeAttrs[i].name;
+    vals[i] = nativeAttrs[i].value ?? '';
+  }
+  
+  // 2. Implicit content directive (Fixed original `.attribute` typo)
   if (!isParent && !hasSyn) {
     let hasContent = false;
-    for (let i = 0, len = attributes.length; i < len; i++) {
-      if (CONTENT_DIRECTIVES.has(attributes[i].attribute)) {
+    for (let i = 0; i < len; i++) {
+      // Your original code checked attributes[i].attribute which is undefined.
+      // Now it properly checks the actual string name (keys[i]).
+      if (CONTENT_DIRECTIVES.has(keys[i])) {
         hasContent = true;
         break;
       }
     }
     if (!hasContent) {
       const key = useStrict ? 'textContent' : 'innerHTML';
-      attributes.push({ attribute: key, value: child[key] });
+      const val = child[key];
+      if (val && val.length > 0) {
+        keys.push(key);
+        vals.push(val);
+        len++; // Expand the loop boundary to process this fake attribute
+      }
     }
   }
   
-  // OPTIMIZATION: Hoist component ID tagging completely out of the attribute loop.
-  // This avoids checking `attribute === 'id'` on every single iteration.
+  // OPTIMIZATION: Hoisted out of the loop
   if (isComponent && child.hasAttribute('id')) {
     child.setAttribute('data-__v_cname__', name);
   }
   
-  // ── 2. Main attribute loop ──
   const arr = [];
-  const childStyle = child.style; // cache the CSSStyleDeclaration
+  const childStyle = child.style;
   let VAID = null;
   let vaChecked = false;
+  let evtId = null;
+  let evtChecked = false;
   
-  for (let i = 0, len = attributes.length; i < len; i++) {
-    const attr = attributes[i];
-    let attribute = attr.attribute;
-    let value = attr.value ?? ''; // ?? preserves 0 / false
+  // 3. Main processing loop runs against frozen arrays, safe from DOM mutation
+  for (let i = 0; i < len; i++) {
+    let attribute = keys[i];
+    let value = vals[i];
     
-    if (hasSyn && attribute === "v:syn") {
+    if (hasSyn && (attribute === "textContent" || attribute === 'v:text')) {
+      child.textContent = value;
       if (isRootComponent) child.removeAttribute("v:syn");
       continue;
     }
     
-    // class → className (skip for SVG where "class" is the correct attr)
     if (attribute === 'class' && !isSVG) attribute = 'className';
     
-    // ── Fast prefix dispatch via char codes ──
+    const conv = convertDirective(attribute, value, child);
+    attribute = conv[0];
+    value = conv[1];
+    const once = conv[2];
+    
     const c0 = attribute.charCodeAt(0);
     
     // "on…" → illegal event syntax
     if (c0 === 111 /* o */ && attribute.charCodeAt(1) === 110 /* n */ ) {
-      // SAFETY FIX: Avoid child.outerHTML which triggers massive DOM serialization 
-      // and can cause severe GC spikes/frame drops when an error is thrown.
       throw new Error(
-        `Valen:\nEvent names must start with '@'.\nRefer to element: <${child.tagName.toLowerCase()}>.`
+        "Valen:\nEvent names must start with '@'.\nRefer to element: <" + child.tagName.toLowerCase() + ">."
       );
     }
     
     // "@…" → event binding
     if (c0 === 64 /* @ */ ) {
       if (value) {
-        child.setAttribute('data-v-on', attribute.slice(1));
-        child.setAttribute('data-v-exp', value.trim());
+        if (!evtChecked) {
+          evtId = child.getAttribute('data-evt_id');
+          evtChecked = true;
+        }
+        if (!evtId) {
+          evtId = 'evt' + ctx.evtCounter++;
+          child.setAttribute('data-evt_id', evtId);
+        }
+        
+        const eventName = attribute.substring(1);
+        
+        // Fast Map caching without fallback array allocations
+        let cache = eventsCache.get(evtId);
+        if (cache === undefined) {
+          cache = [];
+          eventsCache.set(evtId, cache);
+        }
+        cache.push({ name: eventName, value });
+        usedEvents.add(eventName);
       }
       child.removeAttribute(attribute);
       continue;
     }
     
-    // ── Directive conversion ──
-    // OPTIMIZATION: Avoid array destructuring overhead in hot path. 
-    // Direct index access is measurably faster than the iterator protocol.
-    const conv = convertDirective(attribute, value, child);
-    attribute = conv[0];
-    value = conv[1];
-    const once = conv[2];
-    
-    // ── Template detection (single scan) ──
-    const hasTemplate = value.includes('[') && value.includes(']');
-    
-    // ── Resolve the mapped property name once ──
+    // Fast string check bypasses .includes() allocation
+    const hasTemplate = value.indexOf('[') !== -1 && value.indexOf(']') !== -1;
     const prop = ATTR_TO_PROP[attribute] ?? attribute;
-    
-    // ── Style vs attribute/property ──
     const style = KNOWN_STYLE_PROPS.get(prop);
+    
+    if (!hasTemplate && !style) continue;
     
     const finalValue = hasTemplate ? evaluateTemplate(value, instance) : value;
     
-    // Moved inside loop to avoid manual resetting
+    if (prop === "v:exist" && (finalValue === "false")) {
+      child.remove();
+      break;
+    }
+    
     let isAttribute = false;
     
     if (style) {
       childStyle[style] = finalValue;
       child.removeAttribute(attribute);
-    } else if (isSVG) {
+    } else if (SVG_SPECIFIC.has(prop)) {
       child.setAttribute(prop, finalValue);
     } else if (child.hasAttribute(prop)) {
       isAttribute = true;
-      // OPTIMIZATION: Use strict inequality (!==) to avoid type coercion overhead
       if (finalValue !== "false") {
         child.setAttribute(prop, finalValue);
       } else {
@@ -378,68 +436,81 @@ function generateDataVA(child, isParent, instance) {
     
     if (!hasTemplate) continue;
     
-    // ── Lazy VAID: only touch the DOM when a template actually exists ──
     if (!vaChecked) {
       VAID = child.getAttribute('data-valen_id');
       vaChecked = true;
     }
     if (!VAID) {
-      // OPTIMIZATION: String concatenation is marginally faster than template literals
       VAID = 'va' + ctx.counterVA++;
       child.setAttribute('data-valen_id', VAID);
     }
     
-    // ── Build entry (shared hidden class via createEntry) ──
     const expression = b(value).trim();
     const entry = createEntry(
       value,
-      style ? 'style.' + attribute : attribute, // String concatenation
+      style ? 'style.' + style : attribute,
       VAID,
       once,
       isAttribute
     );
     
-    // 36 = '$' → global state
+    // 36 = '$'
     if (expression.charCodeAt(0) === 36) {
       GLOBAL_STATE.dataVA.push(entry);
     } else {
       arr.push(entry);
     }
   }
+  
+  child.setAttribute("valen_processed", "");
   return arr;
 }
 
 
 
-function buildDependencyMap(instance, data) {
-  if (!instance.dependencyMap) instance.dependencyMap = new Map();
+function _populateDeps(depArr, dataVA, targetMap) {
+  const depLen = depArr.length;
+  const dataLen = dataVA.length;
   
-  
-  const build = (isNotGlobal, depArr) => {
-    let i = 0,
-      len = depArr.length;
-    const dataVA = isNotGlobal ? data : GLOBAL_STATE.dataVA;
-    const targetMap = isNotGlobal ? instance.dependencyMap : GLOBAL_STATE.dependencyMap;
+  for (let i = 0; i < depLen; i++) {
+    const item = depArr[i];
+    const temp = item.temp;
+    const key = item.key;
     
-    for (i = 0; i < len; i++) {
-      const { temp, key } = depArr[i];
-      dataVA.forEach((entry, j) => {
-        if (entry.template.includes(temp)) {
-          let deps = targetMap.get(key);
-          if (!deps) {
+    let deps = undefined;
+    
+    for (let j = 0; j < dataLen; j++) {
+      const entry = dataVA[j];
+      if (entry.template.indexOf(temp) !== -1) {
+        if (deps === undefined) {
+          deps = targetMap.get(key);
+          if (deps === undefined) {
             deps = new Set();
             targetMap.set(key, deps);
           }
-          deps.add(entry);
         }
-      });
+        
+        deps.add(entry);
+      }
     }
   }
+}
+
+function buildDependencyMap(instance, data) {
+  if (!instance.dependencyMap) instance.dependencyMap = new Map();
   
-  if (ctx.currentDepArr.length) build(true, ctx.currentDepArr);
-  if (ctx.globalCurrentDepArr.length) build(false, ctx.globalCurrentDepArr);
+  const localDepArr = ctx.currentDepArr;
+  const globalDepArr = ctx.globalCurrentDepArr;
   
-  ctx.currentDepArr = [];
+  if (localDepArr.length > 0) {
+    _populateDeps(localDepArr, data, instance.dependencyMap);
+  }
+  
+  if (globalDepArr.length > 0) {
+    _populateDeps(globalDepArr, GLOBAL_STATE.dataVA, GLOBAL_STATE.dependencyMap);
+  }
+  
+  ctx.currentDepArr.length = [];
   ctx.globalCurrentDepArr = [];
   GLOBAL_STATE.dataVA = [];
 }
@@ -478,6 +549,8 @@ function wrapBareExpressions(root) {
 
 
 function processComponentMarkup(jsx, instance, subId) {
+  const isRootComponent = instance.isRootComponent;
+  const isAtom = instance.type === "Atom";
   sharedTemplate.innerHTML = jsx; // parse once
   const fragment = sharedTemplate.content;
   
@@ -495,17 +568,22 @@ function processComponentMarkup(jsx, instance, subId) {
         element.setAttribute("data-v_sub", subId);
       }
       
-      const childData = generateDataVA(
+      const childData = element.hasAttribute("valen_processed") ? null : generateDataVA(
         element,
         element.childElementCount > 0,
         instance
       );
       
-      if (childData.length > 0) {
+      if (childData?.length > 0) {
         data.push.apply(data, childData);
       }
       
+      if (isRootComponent || isAtom) {
+        element.removeAttribute("valen_processed");
+      }
+      
       element.removeAttribute("innertext");
+      element.removeAttribute("isattribute");
     }
     
     buildDependencyMap(instance, data);
@@ -530,117 +608,224 @@ const nodeBindings = new WeakMap();
 function processReactiveNode(node) {
   let bindings = null;
   
-  const getBindings = () => {
-    if (!bindings) {
-      bindings = {};
-      nodeBindings.set(node, bindings);
-    }
-    return bindings;
-  };
-  
   // 1. Process vSub
   const vSub = node.getAttribute("data-v_sub");
-  if (vSub) {
-    getBindings().vDataSub = vSub;
+  if (vSub !== null) {
+    bindings = Object.create(null); // Dictionary without prototype overhead
+    bindings.vDataSub = vSub;
     node.removeAttribute("data-v_sub");
   }
   
-  // 2. Process Reactive ID
-  const valen_id = node.getAttribute('data-valen_id');
-  if (valen_id && !reactiveCache.has(valen_id)) {
-    reactiveCache.set(valen_id, node);
-    node.removeAttribute('data-valen_id');
-  }
-  
-  // 3. Process Event Listeners
-  const vExp = node.getAttribute("data-v-exp");
-  if (vExp) {
-    const b = getBindings();
-    b.vOn = node.getAttribute("data-v-on");
-    b.vExpr = vExp;
-    node.removeAttribute('data-v-on');
-    node.removeAttribute('data-v-exp');
-  }
-  
+  // 2. Process vCName
   const vCName = node.getAttribute("data-__v_cname__");
-  if (vCName) {
-    getBindings().vCName = vCName;
+  if (vCName !== null) {
+    if (bindings === null) bindings = Object.create(null);
+    bindings.vCName = vCName;
     node.removeAttribute("data-__v_cname__");
   }
-}
-
-function addToReactiveCache(parent) {
-  // Process the root node first
-  processReactiveNode(parent);
   
-  const walker = document.createTreeWalker(
-    parent,
-    NodeFilter.SHOW_ELEMENT
-  );
+  // 3. Process valen_id
+  const valenId = node.getAttribute("data-valen_id");
+  if (valenId !== null) {
+    if (!reactiveCache.has(valenId)) {
+      reactiveCache.set(valenId, node);
+    }
+    node.removeAttribute("data-valen_id");
+  }
   
-  let node;
-  while ((node = walker.nextNode())) {
-    processReactiveNode(node);
+  // 4. Process Events (Fixed Map lookup & lazy evaluation)
+  const evtId = node.getAttribute('data-evt_id');
+  if (evtId !== null) {
+    const events = eventsCache.get(evtId);
+    
+    // Map.get() returns undefined on miss, NOT null.
+    if (events !== undefined) {
+      if (bindings === null) bindings = Object.create(null);
+      bindings.entries = events;
+      
+      // Cleanup the map immediately to free memory
+      eventsCache.delete(evtId);
+    }
+    
+    node.removeAttribute('data-evt_id');
+  }
+  
+  if (bindings !== null) {
+    nodeBindings.set(node, bindings);
   }
 }
 
 
-const DELEGATED_EVENTS = new Set(['click', 'input', 'submit', 'change', 'keydown']);
+function addToReactiveCache(parent) {
+  // 1. Process the root node first
+  processReactiveNode(parent);
+  
+  const elements = parent.getElementsByTagName ?
+    parent.getElementsByTagName('*') :
+    parent.querySelectorAll('*');
+  
+  const len = elements.length;
+  
+  for (let i = 0; i < len; i++) {
+    processReactiveNode(elements[i]);
+  }
+}
 
+
+const EVENT_ALIAS_MAP = {
+  mousedown: 'pointerdown',
+  touchstart: 'pointerdown',
+  mouseup: 'pointerup',
+  touchend: 'pointerup',
+  mousemove: 'pointermove',
+  touchmove: 'pointermove',
+  mouseenter: 'pointerover',
+  mouseleave: 'pointerout',
+};
+
+
+const usedEvents = new Set();
+const _lastTriggerTime = new WeakMap();
 const eventHandlerCache = new LRUCache(500);
 
-function _makeContainerHandler(instance) {
+function _makeContainerHandler(instance, root) {
   return function delegatedHandler(e) {
+    const type = e.type;
     const target = e.target;
-    const bindings = nodeBindings.get(target)
-    if (bindings?.vOn !== e.type) return;
     
-    const expression = bindings.vExpr;
+    // --- A. Ghost-click dedupe (Optimized) ---
+    let pointerId = e.pointerId;
+    const touches = e.changedTouches;
     
-    const subId = bindings.vDataSub;
+    // Exact original logic: touches explicitly override pointerId
+    if (touches && touches.length > 0) {
+      pointerId = touches[0].identifier;
+    }
+    if (pointerId == null) pointerId = 0; // == null catches undefined too
     
-    let targetInstance = subId ? components.get(subId) : instance;
+    const normalizedType = EVENT_ALIAS_MAP[type] || type;
+    const dedupeKey = normalizedType + '_' + pointerId;
     
+    let timestamps = _lastTriggerTime.get(target);
+    if (!timestamps) {
+      timestamps = Object.create(null); // Faster dictionary lookups than {}
+      _lastTriggerTime.set(target, timestamps);
+    }
+    
+    const now = performance.now();
+    if (type.startsWith('mouse')) {
+      const lastTime = timestamps[dedupeKey];
+      if (lastTime && (now - lastTime < 80)) {
+        return; // Blocks synthetic mouse events after touch
+      }
+    }
+    timestamps[dedupeKey] = now;
+    
+    // --- B. DOM Traversal (Zero-Allocation) ---
+    let current = target;
+    let vOn = undefined;
+    let vExpr = undefined;
+    let vDataSub = undefined;
+    let loopRan = false;
+    
+    while (current && current !== root) {
+      loopRan = true;
+      const b = nodeBindings.get(current);
+      
+      // Reset variables for this iteration
+      vOn = undefined;
+      vExpr = undefined;
+      // Fixed a hidden bug: original `b.vDataSub` would throw if b was undefined
+      vDataSub = b ? b.vDataSub : undefined;
+      // Replaces array allocation (b?.entries?.filter(...)) with a fast loop
+      if (b && b.entries) {
+        const entries = b.entries;
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i];
+          
+          if (entry.name && entry.name === type) {
+            vOn = type;
+            vExpr = entry.value;
+            break; // Takes the first match (emulates bFiltered[0])
+          }
+        }
+      }
+      
+      const normalizedStored = EVENT_ALIAS_MAP[vOn] || vOn;
+      
+      // Check if the user's stored event matches the actual browser event
+      if (normalizedStored === type) {
+        break;
+      }
+      
+      current = current.parentNode;
+    }
+    
+    // Emulates the original `if (!bindings || !current)` logic quirk
+    if (!loopRan || !current) return;
+    
+    // --- C. Resolve instance ---
+    let targetInstance = vDataSub ? components.get(vDataSub) : instance;
     if (!targetInstance) return;
     
     if (typeof targetInstance === 'function') {
       targetInstance = targetInstance();
     }
+    if (!targetInstance) return;
     
-    let handler = eventHandlerCache.get(expression);
+    // --- D. Get/Cache handler ---
+    let handler = eventHandlerCache.get(vExpr);
     if (!handler) {
       try {
-        handler = new Function('e', 'value', `const state = this.state;${expression}`);
-        eventHandlerCache.set(expression, handler);
+        handler = new Function(
+          'e',
+          'value',
+          'const state=this.state;try{' + vExpr + '}catch(err){console.error("Valen Event Handler error:\\n"+err)}'
+        );
+        eventHandlerCache.set(vExpr, handler);
       } catch (err) {
-        console.warn(`Valen: Failed to execute event handler:\n${expression}\n${err}`);
+        console.warn('[Valen] Failed to compile:', vExpr, err);
         return;
       }
     }
     
-    handler.call(targetInstance, e, target.value); // .call avoids bind() allocation
+    // --- E. Execute ---
+    handler.call(targetInstance, e, current.value);
   };
 }
 
 function setupEventDelegation(root, instance) {
-  if (root._vDelegated) return;
-  root._vDelegated = true;
+  if (root._vDelegated) return root._vDelegatedHandler;
   
-  const handler = _makeContainerHandler(instance);
-  DELEGATED_EVENTS.forEach(eventType => {
-    root.addEventListener(eventType, handler);
+  const eventsToAttach = usedEvents;
+  const handler = _makeContainerHandler(instance, root);
+  
+  eventsToAttach.forEach(eventType => {
+    // Smart passive: only pointerdown needs passive:false
+    const isPreventable = (eventType === 'pointerdown' || eventType === 'touchstart');
+    root.addEventListener(eventType, handler, { passive: !isPreventable });
   });
   
+  root._vDelegated = true;
+  root._vDelegatedHandler = handler;
+  root._vUsedEvents = eventsToAttach;
   return handler;
 }
 
-function removeEventDelegation(root, handler) {
-  DELEGATED_EVENTS.forEach(eventType => {
-    root.removeEventListener(eventType, handler);
-  });
-  
-  removeFromReactiveCache(root.querySelectorAll("*"));
+// ============================================================
+// 3. CLEANUP (PREVENTS LEAKS)
+// ============================================================
+function removeEventDelegation(root) {
+  if (!root._vDelegated) return;
+  const handler = root._vDelegatedHandler;
+  const events = root._vUsedEvents || usedEvents;
+  events.forEach(ev => root.removeEventListener(ev, handler));
+  root._vDelegated = false;
+  root._vDelegatedHandler = null;
+  root._vUsedEvents = null;
 }
+
+
 
 const renderComponent = (instance, name, flag, toFrag) => {
   // Component instantiation

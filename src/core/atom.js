@@ -30,8 +30,8 @@ function renderItem(isTemplateFunc, itemData, index, template, isReactive, insta
 }
 
 function _set(index, value) {
-  if (this.isDestroyed || !this.isMounted) return;
-  
+  if (this.isDestroyed) return;
+ 
   if (typeof index === 'number') {
     if (value && typeof value === 'object') {
       this.executingIndex = index;
@@ -87,7 +87,13 @@ export default function Atom(activatorFunc) {
       const bindings = nodeBindings.get(element);
       const cName = bindings?.vCName;
       if (cName) {
-        const component = components.get(cName);
+        let component = components.get(cName);
+        
+        if(typeof component === 'function') {
+          component = component();
+          components.set(cName, component);
+        }
+        
         component?.atomDeps.add(name);
       }
       return element;
