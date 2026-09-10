@@ -99,7 +99,6 @@ function update(child, key, evaluated, isAttribute) {
     return;
   }
   
-  
   // ── 6. Property mode ────────────────────────────────────────
   let isProp = _knownPropsCache[key];
   
@@ -241,6 +240,8 @@ function convertDirective(attr, value, child) {
   if (attr.startsWith('v:copy:')) {
     const endIdx = attr.indexOf(':', 7);
     const _var = endIdx === -1 ? attr.substring(7) : attr.substring(7, endIdx);
+    /*const err = attr.substring(endIdx);
+    console.log(err)*/
     const val = "navigator.clipboard.writeText(" + _var + ").then(()=>{" + value + "}).catch(err=>console.error('Failed to copy text:\\n'+err))";
     return ["@click", val, false];
   }
@@ -352,7 +353,6 @@ function generateDataVA(child, isParent, instance) {
   for (let i = 0; i < len; i++) {
     let attribute = keys[i];
     let value = vals[i];
-    
     if (hasSyn && (attribute === "textContent" || attribute === 'v:text')) {
       child.textContent = value;
       if (isRootComponent) child.removeAttribute("v:syn");
@@ -405,9 +405,9 @@ function generateDataVA(child, isParent, instance) {
     // Fast string check bypasses .includes() allocation
     const hasTemplate = value.indexOf('[') !== -1 && value.indexOf(']') !== -1;
     const prop = ATTR_TO_PROP[attribute] ?? attribute;
-    const style = KNOWN_STYLE_PROPS.get(prop);
+    const style = prop === 'src' ? undefined : KNOWN_STYLE_PROPS.get(prop);
     
-    if (!hasTemplate && !style) continue;
+    if (!hasTemplate && !style && prop !== "v:exist") continue;
     
     const finalValue = hasTemplate ? evaluateTemplate(value, instance) : value;
     
@@ -583,7 +583,7 @@ function processComponentMarkup(jsx, instance, subId) {
       }
       
       element.removeAttribute("innertext");
-      element.removeAttribute("isattribute");
+      element.removeAttribute("isAttribute");
     }
     
     buildDependencyMap(instance, data);

@@ -11,7 +11,7 @@ const startRegex = /(@[\w]+|[\w-:]+)\s*=\s*\[/g;
 const lintPlaceholders = (html, isWidget) => {
   const entry = lintedCache.get(html);
   if (entry) return entry;
-
+ 
   let result = '';
   let lastIndex = 0;
   let match;

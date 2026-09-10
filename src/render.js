@@ -8,8 +8,12 @@ let appIsRendered = false;
 export default function render(component) {
   if (appIsRendered) return;
   
-  const activatorFunc = components.get(component.name);
+  if (!component.isRootComponent || !component.mount) {
+    throw new Error(`Valen:\nCannot call render on a non-root Component.`);
+  }
   
+  const activatorFunc = components.get(component.name);
+ 
   if (typeof activatorFunc === "function") {
     component = activatorFunc();
   }
