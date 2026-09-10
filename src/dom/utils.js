@@ -210,6 +210,7 @@ function initiateStyleSheet(selector = "", instance = {}, shouldSwitch) {
   if (!instance.stylesheet) return;
   let styles = objToStyle(selector, instance.stylesheet, "", shouldSwitch);
   if (!stylesheet.isAppended) {
+    stylesheet.el.type = "text/css";
     document.head.appendChild(stylesheet.el);
     stylesheet.isAppended = true;
   }
