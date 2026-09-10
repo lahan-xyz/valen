@@ -122,17 +122,27 @@ const NORMALIZED_EVENTS = new Set([
 export const KNOWN_STYLE_PROPS = new Map();
 
 {
-  const keys = Object.keys(sharedTemplate.style);
-  for (let i = 0, len = keys.length; i < len; i++) {
-    const k = keys[i];
-    
-    if (!SVG_SPECIFIC.has(k)) {
-      const key = k.replace(camelReg, (e) => e.toLowerCase());
-      const val = k.replace(camelReg, (e) => `-${e.toLowerCase()}`);
-      KNOWN_STYLE_PROPS.set(key, val);
-    }
-  }
+  const style = sharedTemplate.style;
   
+  for (const k in style) {
+    if (SVG_SPECIFIC.has(k)) continue;
+    
+    const len = k.length;
+    let key = '';
+    let val = '';
+    for (let i = 0; i < len; i++) {
+      const c = k.charCodeAt(i);
+      if (c >= 65 && c <= 90) { // A–Z
+        const lower = String.fromCharCode(c | 32); // fast toLowerCase for ASCII
+        key += lower;
+        val += '-' + lower;
+      } else {
+        key += k[i];
+        val += k[i];
+      }
+    }
+    KNOWN_STYLE_PROPS.set(key, val);
+  }
 }
 
 
