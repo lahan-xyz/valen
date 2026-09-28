@@ -2,7 +2,6 @@ import { Component } from 'valen';
 
 function Footer() {
   return {
-    state: { mail: 'ops@aero-n5.io', cp: false }, // Kept your structure, adjusted mail for this context
     template: `
       <footer class="footer reveal">
         <div class="f-rule"></div>
